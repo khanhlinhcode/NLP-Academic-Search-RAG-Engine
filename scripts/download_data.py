@@ -22,7 +22,7 @@ from src.config import settings
 
 
 def download_and_prepare(max_papers: int = 15000) -> None:
-    """Download arXiv papers and save as JSONL."""
+    """Download arXiv papers and save as JSONL. """
 
     settings.data.ensure_dirs()
     output_path = settings.data.raw_dir / "papers.jsonl"
