@@ -246,3 +246,4 @@ docker exec nlp-search-ollama ollama pull qwen2.5:7b
 ## 📄 License
 
 MIT License — see [LICENSE](LICENSE) for details.
+# NLP-Academic-Search-RAG-Engine
