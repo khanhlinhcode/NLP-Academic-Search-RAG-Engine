@@ -1,0 +1,23 @@
+[project]
+name = "nlp-academic-search"
+version = "1.0.0"
+description = "NLP Academic Search & RAG Engine — Semantic search for scientific papers with LLM-powered Q&A"
+readme = "README.md"
+requires-python = ">=3.10"
+license = {text = "MIT"}
+authors = [
+    {name = "Linh To"},
+]
+keywords = ["nlp", "search", "rag", "embeddings", "faiss", "bm25", "semantic-search"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+pythonpath = ["."]
+addopts = "-v --tb=short"
+
+[tool.ruff]
+target-version = "py310"
+line-length = 100
+
+[tool.ruff.lint]
+select = ["E", "F", "I", "W"]
