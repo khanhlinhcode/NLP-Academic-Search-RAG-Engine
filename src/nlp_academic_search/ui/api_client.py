@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import json
 from collections.abc import Generator
+from typing import Any
 
 import httpx
 
@@ -20,7 +21,7 @@ class AcademicSearchClient:
         base_url: str,
         *,
         timeout: float = 300.0,
-        transport: httpx.BaseTransport | None = None,
+        transport: Any = None,
     ) -> None:
         self.base_url = base_url.rstrip("/")
         self._client = httpx.Client(
