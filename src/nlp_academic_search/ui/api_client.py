@@ -20,13 +20,16 @@ class AcademicSearchClient:
         self,
         base_url: str,
         *,
+        api_token: str | None = None,
         timeout: float = 300.0,
         transport: Any = None,
         client: Any = None,
     ) -> None:
         self.base_url = base_url.rstrip("/")
+        headers = {"Authorization": f"Bearer {api_token}"} if api_token else None
         self._client = client or httpx.Client(
             base_url=self.base_url,
+            headers=headers,
             timeout=httpx.Timeout(timeout, connect=3.0),
             transport=transport,
         )
@@ -41,14 +44,19 @@ class AcademicSearchClient:
             response.raise_for_status()
             return response.json()
         except httpx.ConnectError as exc:
-            raise APIError(
-                f"FastAPI is not reachable at {self.base_url}. Start it with `make api`."
-            ) from exc
+            hint = (
+                "Start it with `make api`."
+                if "localhost" in self.base_url or "127.0.0.1" in self.base_url
+                else "The free backend may be waking up; retry shortly and verify API_BASE_URL."
+            )
+            raise APIError(f"FastAPI is not reachable at {self.base_url}. {hint}") from exc
         except httpx.TimeoutException as exc:
             message = "The API timed out while loading local models or search results."
             raise APIError(message) from exc
         except httpx.HTTPStatusError as exc:
             detail = _response_detail(exc.response)
+            if exc.response.status_code in {401, 403}:
+                raise APIError("Backend authentication failed. Verify BACKEND_API_TOKEN.") from exc
             raise APIError(f"The API returned {exc.response.status_code}: {detail}") from exc
         except (json.JSONDecodeError, ValueError) as exc:
             raise APIError("The API returned an unreadable response.") from exc
@@ -69,6 +77,7 @@ class AcademicSearchClient:
         year_from: int | None = None,
         year_to: int | None = None,
         author: str | None = None,
+        source: str | None = None,
         offset: int = 0,
     ) -> dict:
         path = "/search" if method == "hybrid" else f"/search/{method}"
@@ -79,6 +88,7 @@ class AcademicSearchClient:
             "year_from": year_from,
             "year_to": year_to,
             "author": author,
+            "source": source,
             "offset": offset if offset else None,
         }
         return self._json_request(
@@ -105,13 +115,20 @@ class AcademicSearchClient:
                 response.raise_for_status()
                 yield from _iter_sse(response.iter_lines())
         except httpx.ConnectError as exc:
-            raise APIError(
-                f"FastAPI is not reachable at {self.base_url}. Start it with `make api`."
-            ) from exc
+            hint = (
+                "Start it with `make api`."
+                if "localhost" in self.base_url or "127.0.0.1" in self.base_url
+                else "The free backend may be waking up; retry shortly and verify API_BASE_URL."
+            )
+            raise APIError(f"FastAPI is not reachable at {self.base_url}. {hint}") from exc
         except httpx.TimeoutException as exc:
-            raise APIError("RAG generation timed out. Check Ollama and try again.") from exc
+            raise APIError(
+                "RAG generation timed out. Check the generation provider and retry."
+            ) from exc
         except httpx.HTTPStatusError as exc:
             detail = _response_detail(exc.response)
+            if exc.response.status_code in {401, 403}:
+                raise APIError("Backend authentication failed. Verify BACKEND_API_TOKEN.") from exc
             raise APIError(f"The API returned {exc.response.status_code}: {detail}") from exc
 
 

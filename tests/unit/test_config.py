@@ -41,3 +41,32 @@ def test_load_settings_names_invalid_environment_variable(monkeypatch):
     monkeypatch.setenv("API_PORT", "not-a-port")
     with pytest.raises(RuntimeError, match="API_PORT"):
         load_settings()
+
+
+def test_cloud_profile_requires_qdrant_but_allows_search_without_groq_key():
+    config = Settings(  # type: ignore[call-arg]
+        _env_file=None,  # pyright: ignore[reportCallIssue]
+        environment="production",
+        deployment_profile="cloud",
+        retrieval_provider="qdrant",
+        generation_provider="groq",
+        reranker_provider="disabled",
+        qdrant_url="https://fixture.qdrant.test",
+        qdrant_api_key="qdrant-secret",
+        qdrant_dense_model="sentence-transformers/all-MiniLM-L6-v2",
+        backend_api_token="backend-secret",
+        cors_origins="https://fixture.streamlit.app",
+    )
+    assert config.qdrant.collection_alias == "academic-papers-current"
+    assert config.groq.api_key is None
+
+
+def test_cloud_profile_rejects_missing_qdrant_configuration():
+    with pytest.raises(ValidationError, match="QDRANT_URL"):
+        Settings(  # type: ignore[call-arg]
+            _env_file=None,  # pyright: ignore[reportCallIssue]
+            deployment_profile="cloud",
+            retrieval_provider="qdrant",
+            generation_provider="groq",
+            reranker_provider="disabled",
+        )

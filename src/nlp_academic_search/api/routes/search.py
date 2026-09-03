@@ -9,8 +9,7 @@ from fastapi import APIRouter, Depends, Query, Request
 
 from nlp_academic_search.api.schemas import PaperResponse, SearchResponse
 from nlp_academic_search.api.services import ServiceContainer, get_services
-from nlp_academic_search.search.hybrid_search import FusionMethod
-from nlp_academic_search.search.models import SearchFilters
+from nlp_academic_search.search.models import FusionMethod, SearchFilters
 
 router = APIRouter(prefix="/search", tags=["Search"])
 
@@ -27,22 +26,31 @@ def _search(
     year_from: int | None,
     year_to: int | None,
     author: str | None,
+    source: str | None,
     fusion: FusionMethod = FusionMethod.RRF,
 ) -> SearchResponse:
     started = time.perf_counter()
-    filters = SearchFilters(category=category, year_from=year_from, year_to=year_to, author=author)
-    candidates = services.search(query, method, top_k + offset + 1, filters=filters, fusion=fusion)
-    results = candidates[offset : offset + top_k]
+    filters = SearchFilters(
+        category=category,
+        year_from=year_from,
+        year_to=year_to,
+        author=author,
+        source=source,
+    )
+    batch = services.search_batch(query, method, top_k + offset + 1, filters=filters, fusion=fusion)
+    results = batch.results[offset : offset + top_k]
     return SearchResponse(
         query=query,
-        method=fusion.value if method == "hybrid" else method,
+        method=batch.retrieval_mode,
         total_results=len(results),
         results=[PaperResponse.model_validate(result.to_dict()) for result in results],
         latency_ms=round((time.perf_counter() - started) * 1000, 2),
         offset=offset,
         page_size=top_k,
-        has_more=len(candidates) > offset + top_k,
+        has_more=len(batch.results) > offset + top_k,
         request_id=getattr(request.state, "request_id", None),
+        retrieval_mode=batch.retrieval_mode,
+        warnings=batch.warnings,
     )
 
 
@@ -56,6 +64,7 @@ def common_parameters(
     year_from: Annotated[int | None, Query(ge=1900, le=2100)] = None,
     year_to: Annotated[int | None, Query(ge=1900, le=2100)] = None,
     author: Annotated[str | None, Query(max_length=200)] = None,
+    source: Annotated[str | None, Query(max_length=100)] = None,
 ) -> dict[str, object]:
     return {
         "query": q,
@@ -65,6 +74,7 @@ def common_parameters(
         "year_from": year_from,
         "year_to": year_to,
         "author": author,
+        "source": source,
     }
 
 

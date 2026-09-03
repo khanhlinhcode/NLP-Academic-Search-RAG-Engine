@@ -8,21 +8,13 @@ from collections.abc import AsyncGenerator, Generator
 from typing import Any
 
 import httpx
-import ollama
 
 from nlp_academic_search.config import settings
-
-
-class RAGGenerationError(RuntimeError):
-    """Base generation failure."""
-
-
-class ModelUnavailableError(RAGGenerationError):
-    """Ollama or the configured model is unavailable."""
-
-
-class GenerationTimeoutError(RAGGenerationError):
-    """Generation exceeded its configured deadline."""
+from nlp_academic_search.providers.generation.base import (
+    GenerationTimeoutError,
+    ModelUnavailableError,
+    RAGGenerationError,
+)
 
 
 class RAGGenerator:
@@ -33,6 +25,9 @@ class RAGGenerator:
         client: Any | None = None,
         async_transport: httpx.AsyncBaseTransport | None = None,
     ) -> None:
+        import ollama
+
+        self._ollama = ollama
         self.model_name = model_name or settings.ollama.model_name
         self.base_url = settings.ollama.base_url
         self.timeout_seconds = settings.ollama.timeout_seconds
@@ -50,7 +45,7 @@ class RAGGenerator:
             503,
         }:
             return ModelUnavailableError(f"Ollama model '{self.model_name}' is unavailable")
-        if isinstance(exc, ollama.ResponseError) and exc.status_code in {404, 502, 503}:
+        if isinstance(exc, self._ollama.ResponseError) and exc.status_code in {404, 502, 503}:
             return ModelUnavailableError(f"Ollama model '{self.model_name}' is unavailable")
         return RAGGenerationError("Ollama generation failed")
 
@@ -149,3 +144,10 @@ class RAGGenerator:
             )
         except Exception:
             return False
+
+    def close(self) -> None:
+        close = getattr(self.client, "close", None)
+        if callable(close):
+            close()
+
+    provider_name = "ollama"

@@ -1,20 +1,40 @@
 services:
   - type: web
     name: nlp-academic-search-api
-    env: docker
+    runtime: docker
     plan: free
-    region: singapore
+    dockerfilePath: ./deploy/Dockerfile.api
+    healthCheckPath: /health/live
     envVars:
-      - key: PORT
-        value: 8000
-      - key: OMP_NUM_THREADS
-        value: 1
-      - key: MKL_NUM_THREADS
-        value: 1
-      - key: OPENBLAS_NUM_THREADS
-        value: 1
-      - key: TORCH_NUM_THREADS
-        value: 1
+      - key: ENVIRONMENT
+        value: production
+      - key: DEPLOYMENT_PROFILE
+        value: cloud
+      - key: RETRIEVAL_PROVIDER
+        value: qdrant
+      - key: GENERATION_PROVIDER
+        value: groq
+      - key: RERANKER_PROVIDER
+        value: disabled
       - key: WEB_CONCURRENCY
         value: 1
-
+      - key: QDRANT_URL
+        sync: false
+      - key: QDRANT_API_KEY
+        sync: false
+      - key: QDRANT_COLLECTION_ALIAS
+        value: academic-papers-current
+      - key: QDRANT_DENSE_MODEL
+        sync: false
+      - key: QDRANT_SPARSE_MODEL
+        value: qdrant/bm25
+      - key: QDRANT_EXPECTED_CORPUS_SHA256
+        sync: false
+      - key: GROQ_API_KEY
+        sync: false
+      - key: GROQ_MODEL
+        value: openai/gpt-oss-20b
+      - key: CORS_ORIGINS
+        sync: false
+      - key: BACKEND_API_TOKEN
+        generateValue: true

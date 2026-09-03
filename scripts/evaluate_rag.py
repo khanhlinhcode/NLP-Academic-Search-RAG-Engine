@@ -20,6 +20,11 @@ def main() -> None:
     parser.add_argument("--benchmark", type=Path, help="RAG benchmark JSON; overrides config")
     parser.add_argument("--top-k", type=int, help="Retrieved source count; overrides config")
     parser.add_argument("--run-id", type=str, default="", help="Experiment run identifier")
+    parser.add_argument(
+        "--api-token",
+        default=None,
+        help="Backend bearer token; defaults to BACKEND_API_TOKEN without printing it",
+    )
     args = parser.parse_args()
 
     config = ExperimentConfig.load(args.config) if args.config else None
@@ -34,6 +39,7 @@ def main() -> None:
         benchmark,
         retrieval_method=retrieval_method,
         top_k=top_k,
+        api_token=args.api_token or settings.backend_api_token,
     )
     if report["aggregate"]["connection_error_rate"] == 1.0:
         report["status"] = "not_evaluated"

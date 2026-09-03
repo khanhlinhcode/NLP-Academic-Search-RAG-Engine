@@ -13,20 +13,27 @@ license-files = ["LICENSE"]
 authors = [{name = "Linh To"}]
 keywords = ["nlp", "rag", "information-retrieval", "faiss", "academic-search"]
 dependencies = [
-    "faiss-cpu>=1.8,<2",
-    "fastapi>=0.115,<1",
     "httpx>=0.27,<1",
-    "numpy>=1.26,<3",
-    "ollama>=0.4,<1",
     "pydantic>=2.9,<3",
     "pydantic-settings>=2.5,<3",
+]
+
+[project.optional-dependencies]
+api-cloud = [
+    "fastapi>=0.115,<1",
+    "qdrant-client>=1.15,<2",
+    "uvicorn[standard]>=0.30,<1",
+]
+local = [
+    "faiss-cpu>=1.8,<2",
+    "fastapi>=0.115,<1",
+    "numpy>=1.26,<3",
+    "ollama>=0.4,<1",
     "rank-bm25>=0.2.2,<1",
     "sentence-transformers>=3.2,<6",
     "torch>=2.2,<3",
     "uvicorn[standard]>=0.30,<1",
 ]
-
-[project.optional-dependencies]
 ui = ["streamlit>=1.39,<2"]
 evaluation = ["datasets>=3,<5", "scikit-learn>=1.4,<2"]
 dev = [
@@ -39,6 +46,7 @@ dev = [
     "pytest-cov>=5,<7",
     "ruff>=0.7,<1",
     "httpx2>=2,<3",
+    "fastapi>=0.115,<1",
 ]
 
 [tool.setuptools.packages.find]
@@ -53,11 +61,7 @@ testpaths = ["tests"]
 pythonpath = ["src", "."]
 addopts = "-q --tb=short --strict-markers -m 'not integration'"
 markers = ["integration: requires local services, models, or larger data assets"]
-filterwarnings = [
-    "error::DeprecationWarning",
-    "ignore:The 'app' shortcut is deprecated:DeprecationWarning:httpx",
-    "ignore:The 'app' shortcut is deprecated:DeprecationWarning:starlette",
-]
+filterwarnings = ["error::DeprecationWarning"]
 
 [tool.coverage.run]
 source = ["nlp_academic_search"]

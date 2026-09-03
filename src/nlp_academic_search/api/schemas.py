@@ -48,6 +48,8 @@ class SearchResponse(BaseModel):
     page_size: int = 10
     has_more: bool = False
     request_id: str | None = None
+    retrieval_mode: str | None = None
+    warnings: list[str] = Field(default_factory=list)
 
 
 class SourceReference(BaseModel):
@@ -101,22 +103,26 @@ class HealthResponse(BaseModel):
     search_ready: bool
     rag_enabled: bool
     ollama_available: bool
+    generation_available: bool = False
     index_provenance: str | None
     models: dict[str, str]
     checks: dict[str, bool]
+    providers: dict[str, str] = Field(default_factory=dict)
 
 
 class StatsResponse(BaseModel):
     total_papers: int
     embedding_model: str
     embedding_revision: str | None
-    embedding_dim: int
+    embedding_dim: int | None
     llm_model: str
     reranker_model: str
     reranker_enabled: bool
     bm25_weight: float
     semantic_weight: float
-    index_provenance: str
+    index_provenance: str | None
+    retrieval_provider: str = "local"
+    generation_provider: str = "ollama"
 
 
 class ErrorDetail(BaseModel):

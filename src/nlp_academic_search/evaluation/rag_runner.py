@@ -81,6 +81,7 @@ def run_rag_evaluation(
     clock: Callable[[], float] = time.perf_counter,
     retrieval_method: str = "rrf",
     top_k: int = 5,
+    api_token: str | None = None,
 ) -> RAGReport:
     """Evaluate RAG with explicit metric populations and sanitized errors.
 
@@ -100,10 +101,17 @@ def run_rag_evaluation(
     error_counts = {"timeout": 0, "connection": 0, "http": 0, "response": 0}
     if cases:
         created_client = client is None
+        request_headers = {"Authorization": f"Bearer {api_token}"} if api_token else None
+        provider_timeout = (
+            settings.groq.timeout_seconds
+            if settings.generation_provider == "groq"
+            else settings.ollama.timeout_seconds
+        )
         http_client = client or httpx.Client(
             base_url=api_url,
             transport=transport,
-            timeout=settings.ollama.timeout_seconds,
+            timeout=provider_timeout,
+            headers=request_headers,
         )
         manager = http_client if created_client else nullcontext(http_client)
         with manager as active_client:
@@ -112,6 +120,7 @@ def run_rag_evaluation(
                 try:
                     response = active_client.post(
                         "/api/v1/ask",
+                        headers=request_headers,
                         json={
                             "question": case["question"],
                             "top_k": top_k,
@@ -177,8 +186,10 @@ def run_rag_evaluation(
         "benchmark_sha256": sha256_file(benchmark_path),
         "corpus_version": _active_version(settings.data.raw_dir / "CURRENT"),
         "index_version": _active_version(settings.data.embeddings_dir / "CURRENT"),
-        "generator_model": settings.ollama.model_name,
-        "generator_revision": "local-tag-unpinned",
+        "generator_model": settings.active_generation_model,
+        "generator_revision": (
+            "provider-managed" if settings.generation_provider == "groq" else "local-tag-unpinned"
+        ),
         "judge_model": "none (deterministic metrics only)",
         "retrieval_method": retrieval_method,
         "top_k": top_k,

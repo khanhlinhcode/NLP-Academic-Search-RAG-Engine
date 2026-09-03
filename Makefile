@@ -1,6 +1,7 @@
 .PHONY: help setup install download preprocess index api ui test test-unit test-integration test-security \
-	coverage lint format format-check typecheck check eval-retrieval eval-rag load-smoke package \
-	docker-config docker-smoke docker-build docker-up docker-down clean
+	coverage lint format format-check typecheck check eval-retrieval eval-cloud-retrieval eval-rag load-smoke package \
+	docker-config docker-smoke docker-build docker-cloud docker-up docker-down \
+	qdrant-migrate qdrant-audit qdrant-smoke clean
 
 UV ?= uv
 
@@ -11,7 +12,7 @@ setup: ## Create a Python 3.11 environment and install all dependency groups
 	$(UV) sync --all-extras --python 3.11
 
 install: ## Install runtime plus UI dependencies
-	$(UV) sync --extra ui --python 3.11
+	$(UV) sync --extra local --extra ui --python 3.11
 
 download: ## Ingest real arXiv metadata (use ARXIV_MAX_RECORDS to limit)
 	$(UV) run python -m scripts.download_data --max-records $${ARXIV_MAX_RECORDS:-15000}
@@ -63,6 +64,9 @@ check: lint format-check typecheck test-unit test-security coverage package ## R
 eval-retrieval: ## Run leakage-free retrieval evaluation
 	$(UV) run python -m scripts.run_evaluation
 
+eval-cloud-retrieval: ## Evaluate Qdrant BM25, dense, and RRF against labelled qrels
+	$(UV) run --all-extras python -m scripts.evaluate_cloud_retrieval
+
 eval-rag: ## Run deterministic RAG evaluation
 	$(UV) run python -m scripts.evaluate_rag
 
@@ -77,6 +81,18 @@ docker-smoke: ## Build and smoke-test API/UI containers
 
 docker-build: ## Build service images
 	docker compose build
+
+docker-cloud: ## Build the lightweight Render API image
+	docker build -f deploy/Dockerfile.api -t academic-search-api:cloud .
+
+qdrant-migrate: ## Upload the active corpus to a versioned Qdrant collection
+	$(UV) run --extra api-cloud python -m scripts.migrate_qdrant migrate
+
+qdrant-audit: ## Validate the configured Qdrant collection and manifest
+	$(UV) run --extra api-cloud python -m scripts.migrate_qdrant audit
+
+qdrant-smoke: ## Run representative BM25, dense, and hybrid cloud queries
+	$(UV) run --extra api-cloud python -m scripts.migrate_qdrant smoke
 
 docker-up: ## Start the stack
 	docker compose up -d

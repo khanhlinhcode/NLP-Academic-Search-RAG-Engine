@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+import hmac
 import json
 import logging
 import time
@@ -17,6 +18,7 @@ from fastapi.responses import JSONResponse
 from nlp_academic_search import __version__
 from nlp_academic_search.api.routes import rag, search
 from nlp_academic_search.api.schemas import HealthResponse, LiveResponse, StatsResponse
+from nlp_academic_search.api.security import InMemoryRateLimiter
 from nlp_academic_search.api.services import (
     ServiceBusyError,
     ServiceContainer,
@@ -24,11 +26,14 @@ from nlp_academic_search.api.services import (
     build_services,
 )
 from nlp_academic_search.config import settings
-from nlp_academic_search.rag.generator import (
+from nlp_academic_search.providers.generation.base import (
+    GenerationInvalidResponseError,
+    GenerationRateLimitedError,
     GenerationTimeoutError,
     ModelUnavailableError,
     RAGGenerationError,
 )
+from nlp_academic_search.providers.retrieval.base import RetrievalUnavailableError
 
 logger = logging.getLogger("academic_search.api")
 if not logger.handlers:
@@ -69,18 +74,45 @@ def create_app(service_container: ServiceContainer | None = None) -> FastAPI:
         lifespan=lifespan,
     )
     application.state.request_slots = asyncio.Semaphore(settings.api.concurrency_limit)
+    application.state.health_cache = None
+    application.state.rate_limiter = InMemoryRateLimiter()
     application.add_middleware(
         CORSMiddleware,
         allow_origins=settings.api.cors_origins,
         allow_credentials=False,
         allow_methods=["GET", "POST", "OPTIONS"],
-        allow_headers=["Content-Type", "X-Request-ID"],
+        allow_headers=["Authorization", "Content-Type", "X-Request-ID"],
     )
 
     @application.middleware("http")
     async def request_context(request: Request, call_next):
         request_id = request.headers.get("X-Request-ID") or uuid.uuid4().hex
         request.state.request_id = request_id
+        token = ""
+        public_paths = {"/", "/health", "/health/live", "/health/ready", "/docs", "/openapi.json"}
+        if settings.backend_api_token and request.url.path not in public_paths:
+            authorization = request.headers.get("Authorization", "")
+            scheme, _, token = authorization.partition(" ")
+            valid = scheme.casefold() == "bearer" and hmac.compare_digest(
+                token, settings.backend_api_token
+            )
+            if not valid:
+                return _error(request, 401, "unauthorized", "Authentication required", False)
+        token_subject = token if settings.backend_api_token else ""
+        client_host = request.client.host if request.client else "unknown"
+        subject = application.state.rate_limiter.subject(token_subject, client_host)
+        if "/ask" in request.url.path:
+            allowed = application.state.rate_limiter.allow(
+                subject, "ask", settings.ask_rate_limit_per_minute
+            )
+        elif "/search" in request.url.path:
+            allowed = application.state.rate_limiter.allow(
+                subject, "search", settings.search_rate_limit_per_minute
+            )
+        else:
+            allowed = True
+        if not allowed:
+            return _error(request, 429, "rate_limited", "Request rate limit exceeded", True)
         started = time.perf_counter()
         try:
             await asyncio.wait_for(application.state.request_slots.acquire(), timeout=0.1)
@@ -125,12 +157,42 @@ def create_app(service_container: ServiceContainer | None = None) -> FastAPI:
     @application.exception_handler(ModelUnavailableError)
     async def model_unavailable(request: Request, _: ModelUnavailableError) -> JSONResponse:
         return _error(
-            request, 503, "model_unavailable", "The configured Ollama model is unavailable", True
+            request, 503, "model_unavailable", "The generation provider is unavailable", True
         )
 
     @application.exception_handler(GenerationTimeoutError)
     async def generation_timeout(request: Request, _: GenerationTimeoutError) -> JSONResponse:
-        return _error(request, 504, "generation_timeout", "Ollama generation timed out", True)
+        return _error(request, 504, "generation_timeout", "Generation provider timed out", True)
+
+    @application.exception_handler(GenerationRateLimitedError)
+    async def generation_rate_limited(
+        request: Request, _: GenerationRateLimitedError
+    ) -> JSONResponse:
+        return _error(
+            request,
+            429,
+            "generation_rate_limited",
+            "Generation quota is temporarily exhausted",
+            True,
+        )
+
+    @application.exception_handler(GenerationInvalidResponseError)
+    async def invalid_generation(
+        request: Request, _: GenerationInvalidResponseError
+    ) -> JSONResponse:
+        return _error(
+            request,
+            502,
+            "generation_invalid_response",
+            "Generation provider returned invalid data",
+            True,
+        )
+
+    @application.exception_handler(RetrievalUnavailableError)
+    async def retrieval_unavailable(request: Request, _: RetrievalUnavailableError) -> JSONResponse:
+        return _error(
+            request, 503, "retrieval_unavailable", "Retrieval provider is unavailable", True
+        )
 
     @application.exception_handler(RAGGenerationError)
     async def generation_error(request: Request, _: RAGGenerationError) -> JSONResponse:
@@ -160,31 +222,41 @@ def create_app(service_container: ServiceContainer | None = None) -> FastAPI:
 
     def health_payload(check_ollama: bool = True) -> HealthResponse:
         services: ServiceContainer | None = getattr(application.state, "services", None)
-        corpus_ready = services is not None and bool(services.papers)
-        index_ready = services.index_compatible() if services else False
+        retrieval = services.retrieval_status() if services else None
+        corpus_ready = bool(retrieval and retrieval.total_papers)
+        index_ready = bool(retrieval and retrieval.ready)
         search_ready = corpus_ready and index_ready
-        ollama_available = services.ollama_available() if services and check_ollama else False
-        rag_ready = not settings.rag_enabled or ollama_available
+        generation_available = (
+            services.generation_available() if services and check_ollama else False
+        )
+        ollama_available = settings.generation_provider == "ollama" and generation_available
+        rag_ready = not settings.rag_enabled or generation_available
         status = (
             "ready" if search_ready and rag_ready else "degraded" if search_ready else "not_ready"
         )
-        manifest = services.semantic.manifest if services else None
         return HealthResponse(
             status=status,
             version=__version__,
-            total_papers=len(services.papers) if services else 0,
+            total_papers=retrieval.total_papers if retrieval else 0,
             search_ready=search_ready,
             rag_enabled=settings.rag_enabled,
             ollama_available=ollama_available,
-            index_provenance=manifest.provenance if manifest else None,
+            generation_available=generation_available,
+            index_provenance=retrieval.provenance if retrieval else None,
             models={
-                "embedding": settings.embedding.model_name,
-                "llm": settings.ollama.model_name,
+                "embedding": (retrieval.embedding_model if retrieval else None)
+                or settings.embedding.model_name,
+                "llm": settings.active_generation_model,
                 "reranker": settings.reranker.model_name
                 if settings.reranker.enabled
                 else "disabled",
             },
-            checks={"corpus": corpus_ready, "index": index_ready, "ollama": rag_ready},
+            checks={"corpus": corpus_ready, "index": index_ready, "generation": rag_ready},
+            providers={
+                "retrieval": settings.retrieval_provider,
+                "generation": settings.generation_provider,
+                "reranker": settings.reranker_provider,
+            },
         )
 
     @application.get("/health", response_model=HealthResponse, tags=["System"])
@@ -201,18 +273,20 @@ def create_app(service_container: ServiceContainer | None = None) -> FastAPI:
     @application.get("/stats", response_model=StatsResponse, tags=["System"])
     def stats() -> StatsResponse:
         services: ServiceContainer = application.state.services
-        manifest = services.semantic.manifest
+        retrieval = services.retrieval_status()
         return StatsResponse(
-            total_papers=len(services.papers),
-            embedding_model=manifest.embedding_model,
-            embedding_revision=manifest.embedding_revision,
-            embedding_dim=manifest.embedding_dimension,
-            llm_model=settings.ollama.model_name,
+            total_papers=retrieval.total_papers,
+            embedding_model=retrieval.embedding_model or settings.embedding.model_name,
+            embedding_revision=retrieval.embedding_revision,
+            embedding_dim=retrieval.embedding_dimension,
+            llm_model=settings.active_generation_model,
             reranker_model=settings.reranker.model_name,
             reranker_enabled=services.reranker is not None,
             bm25_weight=settings.search.bm25_weight,
             semantic_weight=settings.search.semantic_weight,
-            index_provenance=manifest.provenance,
+            index_provenance=retrieval.provenance,
+            retrieval_provider=settings.retrieval_provider,
+            generation_provider=settings.generation_provider,
         )
 
     return application

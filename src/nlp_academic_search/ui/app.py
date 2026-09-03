@@ -19,32 +19,40 @@ st.set_page_config(
 st.markdown(stylesheet(), unsafe_allow_html=True)
 
 
-API_BASE_URL = os.getenv("API_BASE_URL", "http://localhost:8000")
+def configured_api_base_url() -> str:
+    configured = os.getenv("API_BASE_URL")
+    if not configured:
+        try:
+            configured = str(st.secrets["API_BASE_URL"])
+        except (KeyError, FileNotFoundError):
+            configured = None
+    return (configured or "http://localhost:8000").rstrip("/")
+
+
+API_BASE_URL = configured_api_base_url()
+
+
+def configured_backend_token() -> str | None:
+    configured = os.getenv("BACKEND_API_TOKEN")
+    if not configured:
+        try:
+            configured = str(st.secrets["BACKEND_API_TOKEN"])
+        except (KeyError, FileNotFoundError):
+            configured = None
+    return configured or None
+
+
+BACKEND_API_TOKEN = configured_backend_token()
 
 
 @st.cache_resource
-def get_client(base_url: str) -> AcademicSearchClient:
-    client = AcademicSearchClient(base_url)
-    try:
-        client.health()
-        return client
-    except APIError:
-        try:
-            from fastapi.testclient import TestClient
-
-            from nlp_academic_search.api.main import create_app
-
-            app = create_app()
-            test_client = TestClient(app)
-            test_client.__enter__()
-            return AcademicSearchClient(base_url, client=test_client)
-        except Exception:
-            return client
+def get_client(base_url: str, api_token: str | None) -> AcademicSearchClient:
+    return AcademicSearchClient(base_url, api_token=api_token)
 
 
 @st.cache_data(ttl=8, show_spinner=False)
-def get_health(base_url: str) -> dict:
-    return get_client(base_url).health()
+def get_health(base_url: str, api_token: str | None) -> dict:
+    return get_client(base_url, api_token).health()
 
 
 def safe(value: object) -> str:
@@ -86,7 +94,10 @@ def render_masthead(health: dict | None, health_error: str | None) -> None:
     status_class = "ready" if ready else "offline"
     papers = f"{health.get('total_papers', 0):,}" if health else "—"
     model = safe((health or {}).get("models", {}).get("llm", "—"))
-    ollama = "AVAILABLE" if health and health.get("ollama_available") else "UNAVAILABLE"
+    generation = "AVAILABLE" if health and health.get("generation_available") else "UNAVAILABLE"
+    generation_provider = safe(
+        str((health or {}).get("providers", {}).get("generation", "generation")).upper()
+    )
     st.markdown(
         f"""
         <header class="masthead">
@@ -97,7 +108,7 @@ def render_masthead(health: dict | None, health_error: str | None) -> None:
           <dl class="engine-meta">
             <dt>ENGINE STATUS</dt><dd class="{status_class}">[ {status_label} ]</dd>
             <dt>CORPUS</dt><dd>{papers} papers</dd>
-            <dt>OLLAMA</dt><dd>{ollama}</dd>
+            <dt>{generation_provider}</dt><dd>{generation}</dd>
             <dt>MODEL</dt><dd>{model}</dd>
           </dl>
         </header>
@@ -106,19 +117,27 @@ def render_masthead(health: dict | None, health_error: str | None) -> None:
     )
     if health_error:
         st.warning(health_error, icon=None)
+        if st.button("Retry backend connection", key="retry-backend", type="primary"):
+            get_health.clear()
+            st.rerun()
 
 
 def render_pipeline(health: dict | None) -> None:
-    ollama_ready = bool(health and health.get("ollama_available"))
+    generation_ready = bool(
+        health and health.get("generation_available", health.get("ollama_available"))
+    )
+    providers = (health or {}).get("providers", {})
+    retrieval_name = str(providers.get("retrieval", "local")).upper()
+    generation_name = str(providers.get("generation", "ollama")).upper()
     st.markdown('<h3 class="rail-title">Retrieval pipeline</h3>', unsafe_allow_html=True)
     st.markdown(
-        """
+        f"""
         <ol class="pipeline-steps">
           <li><span>01</span><div><strong>Understand query</strong><small>Validate and normalize intent</small></div></li>
-          <li><span>02</span><div><strong>Retrieve candidates</strong><small>BM25 terms + SBERT meaning</small></div></li>
+          <li><span>02</span><div><strong>Retrieve candidates</strong><small>{safe(retrieval_name)} dense + sparse</small></div></li>
           <li><span>03</span><div><strong>Fuse rankings</strong><small>Reciprocal rank fusion</small></div></li>
           <li><span>04</span><div><strong>Refine evidence</strong><small>Optional Cross-Encoder</small></div></li>
-          <li><span>05</span><div><strong>Ground answer</strong><small>Ollama + citation validation</small></div></li>
+          <li><span>05</span><div><strong>Ground answer</strong><small>{safe(generation_name)} + citation validation</small></div></li>
         </ol>
         """,
         unsafe_allow_html=True,
@@ -128,7 +147,7 @@ def render_pipeline(health: dict | None) -> None:
     checks = [
         (health is not None, "API connected"),
         (bool(health and health.get("total_papers")), "Paper index loaded"),
-        (ollama_ready, "Ollama model available"),
+        (generation_ready, f"{generation_name} model available"),
     ]
     for ok, label in checks:
         state = "Ready" if ok else "Check"
@@ -265,7 +284,7 @@ def render_search(client: AcademicSearchClient, health: dict | None) -> None:
                 unsafe_allow_html=True,
             )
         with st.expander("Filter metadata"):
-            filter_a, filter_b, filter_c, filter_d = st.columns(4)
+            filter_a, filter_b, filter_c, filter_d, filter_e = st.columns(5)
             category = filter_a.text_input("Category", placeholder="cs.CL")
             year_from = filter_b.number_input(
                 "From year", min_value=1900, max_value=2100, value=None, step=1
@@ -274,6 +293,7 @@ def render_search(client: AcademicSearchClient, health: dict | None) -> None:
                 "To year", min_value=1900, max_value=2100, value=None, step=1
             )
             author = filter_d.text_input("Author contains", placeholder="Vaswani")
+            source = filter_e.text_input("Source", placeholder="arxiv")
 
     if submitted:
         query_text = (query or "").strip()
@@ -291,6 +311,7 @@ def render_search(client: AcademicSearchClient, health: dict | None) -> None:
                         "year_from": year_from,
                         "year_to": year_to,
                         "author": author,
+                        "source": source,
                         "offset": 0,
                     }
                     execute_search(parameters)
@@ -302,6 +323,8 @@ def render_search(client: AcademicSearchClient, health: dict | None) -> None:
     main_col, rail_col = st.columns([1.75, 1], gap="large")
     with main_col:
         if response:
+            for warning in response.get("warnings", []):
+                st.warning(str(warning), icon=None)
             st.markdown(
                 f'<div class="result-summary"><strong>{response.get("total_results", 0)} papers</strong>'
                 f"<span>{safe(str(response.get('method', 'hybrid')).upper())}</span>"
@@ -445,7 +468,12 @@ def render_saved_answer(entry: dict) -> None:
 
 def render_ask(client: AcademicSearchClient, health: dict | None) -> None:
     history = st.session_state.setdefault("ask_history", [])
-    rag_ready = bool(health and health.get("rag_enabled") and health.get("ollama_available"))
+    rag_ready = bool(
+        health
+        and health.get("rag_enabled")
+        and health.get("generation_available", health.get("ollama_available"))
+    )
+    reranker_available = (health or {}).get("providers", {}).get("reranker") != "disabled"
     with st.form("ask-form", border=False):
         question = st.text_area(
             "Ask the literature",
@@ -463,6 +491,7 @@ def render_ask(client: AcademicSearchClient, health: dict | None) -> None:
                 use_reranker = st.toggle(
                     "Cross-Encoder reranker",
                     value=False,
+                    disabled=not reranker_available,
                     help="Disabled by default until a leakage-free benchmark demonstrates a gain.",
                 )
         with action:
@@ -473,8 +502,8 @@ def render_ask(client: AcademicSearchClient, health: dict | None) -> None:
 
     if not rag_ready:
         st.info(
-            "Question answering is unavailable because the configured Ollama model is not ready. "
-            "Search remains available; start Ollama and pull the configured model to enable Ask.",
+            "Question answering is unavailable because the configured generation provider is not "
+            "ready. Search remains available; verify the provider key, model and quota.",
             icon=None,
         )
 
@@ -610,11 +639,11 @@ def render_ask(client: AcademicSearchClient, health: dict | None) -> None:
 
 
 def main() -> None:
-    client = get_client(API_BASE_URL)
+    client = get_client(API_BASE_URL, BACKEND_API_TOKEN)
     health = None
     health_error = None
     try:
-        health = get_health(API_BASE_URL)
+        health = get_health(API_BASE_URL, BACKEND_API_TOKEN)
     except APIError as exc:
         health_error = str(exc)
 

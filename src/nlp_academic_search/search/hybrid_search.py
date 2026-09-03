@@ -2,19 +2,12 @@
 
 from __future__ import annotations
 
-from enum import StrEnum
-
 import numpy as np
 
 from nlp_academic_search.config import settings
 from nlp_academic_search.search.bm25_search import BM25Searcher
-from nlp_academic_search.search.models import SearchFilters, SearchResult
+from nlp_academic_search.search.models import FusionMethod, SearchFilters, SearchResult
 from nlp_academic_search.search.semantic_search import SemanticSearcher
-
-
-class FusionMethod(StrEnum):
-    WEIGHTED = "weighted"
-    RRF = "rrf"
 
 
 class HybridSearcher:

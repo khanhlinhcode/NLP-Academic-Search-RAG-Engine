@@ -1,0 +1,3 @@
+# Streamlit Community Cloud uses this file before repository-root dependency files.
+streamlit==1.63.0
+httpx==0.28.1

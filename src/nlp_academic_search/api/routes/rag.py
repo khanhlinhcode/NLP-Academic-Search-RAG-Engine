@@ -7,7 +7,7 @@ import time
 from collections.abc import AsyncGenerator, Generator
 from typing import Annotated
 
-from fastapi import APIRouter, Depends
+from fastapi import APIRouter, Depends, Request
 from fastapi.responses import StreamingResponse
 
 from nlp_academic_search.api.schemas import (
@@ -19,12 +19,14 @@ from nlp_academic_search.api.schemas import (
 )
 from nlp_academic_search.api.services import ServiceBusyError, ServiceContainer, get_services
 from nlp_academic_search.config import settings
-from nlp_academic_search.rag.citations import validate_citations
-from nlp_academic_search.rag.generator import (
+from nlp_academic_search.providers.generation.base import (
+    GenerationInvalidResponseError,
+    GenerationRateLimitedError,
     GenerationTimeoutError,
     ModelUnavailableError,
     RAGGenerationError,
 )
+from nlp_academic_search.rag.citations import validate_citations
 from nlp_academic_search.rag.prompt_builder import (
     PROMPT_VERSION,
     InsufficientContextError,
@@ -54,6 +56,7 @@ def _prepare(
         for result in results
         if (result.bm25_score or 0) > 0
         or (result.semantic_score or -1) >= settings.rag_min_relevance_score
+        or (result.rrf_score or 0) > 0
     ]
     papers = [result.paper for result in thresholded]
     retrieval_ms = (time.perf_counter() - started) * 1000
@@ -75,6 +78,8 @@ def _metadata(
     warnings: list[str],
     answer: str,
 ) -> AnswerMetadata:
+    if services.rag_generator is None:
+        raise ModelUnavailableError("Generation provider is not configured")
     citation_validation = validate_citations(answer, len(sources))
     warnings.extend(citation_validation.warnings)
     return AnswerMetadata(
@@ -96,6 +101,8 @@ def _metadata(
 
 @router.post("", response_model=AskResponse, summary="Grounded question answering")
 def ask_question(payload: AskRequest, services: Services) -> AskResponse:
+    if services.rag_generator is None:
+        raise ModelUnavailableError("Generation provider is not configured")
     try:
         package, sources, warnings, method, retrieval_ms = _prepare(payload, services)
     except InsufficientContextError:
@@ -137,7 +144,9 @@ def ask_question(payload: AskRequest, services: Services) -> AskResponse:
 
 
 @router.post("/stream", summary="Streaming grounded question answering")
-def ask_question_stream(payload: AskRequest, services: Services) -> StreamingResponse:
+def ask_question_stream(
+    payload: AskRequest, services: Services, http_request: Request
+) -> StreamingResponse:
     try:
         package, sources, warnings, method, retrieval_ms = _prepare(payload, services)
     except InsufficientContextError:
@@ -171,9 +180,13 @@ def ask_question_stream(payload: AskRequest, services: Services) -> StreamingRes
             )
             services.acquire_generation()
             acquired = True
+            if services.rag_generator is None:
+                raise ModelUnavailableError("Generation provider is not configured")
             yield _sse_event("stage", {"name": "generation", "status": "running"})
             generated_at = time.perf_counter()
             async for token in services.rag_generator.generate_stream_async(package.messages):
+                if await http_request.is_disconnected():
+                    break
                 answer_parts.append(token)
                 yield _sse_event("token", {"token": token})
             generation_ms = (time.perf_counter() - generated_at) * 1000
@@ -195,6 +208,8 @@ def ask_question_stream(payload: AskRequest, services: Services) -> StreamingRes
             ServiceBusyError,
             ModelUnavailableError,
             GenerationTimeoutError,
+            GenerationRateLimitedError,
+            GenerationInvalidResponseError,
             RAGGenerationError,
         ) as exc:
             code = (
@@ -206,6 +221,10 @@ def ask_question_stream(payload: AskRequest, services: Services) -> StreamingRes
                 code = "model_unavailable"
             if isinstance(exc, ServiceBusyError):
                 code = "capacity_busy"
+            if isinstance(exc, GenerationRateLimitedError):
+                code = "generation_rate_limited"
+            if isinstance(exc, GenerationInvalidResponseError):
+                code = "generation_invalid_response"
             yield _sse_event("error", {"code": code, "message": str(exc), "retryable": True})
         finally:
             if acquired:

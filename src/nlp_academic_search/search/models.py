@@ -3,8 +3,16 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
+from enum import StrEnum
 
 from nlp_academic_search.data.loader import Paper
+
+
+class FusionMethod(StrEnum):
+    """Fusion algorithms supported by local and remote retrieval providers."""
+
+    WEIGHTED = "weighted"
+    RRF = "rrf"
 
 
 @dataclass(frozen=True)
@@ -13,6 +21,7 @@ class SearchFilters:
     year_from: int | None = None
     year_to: int | None = None
     author: str | None = None
+    source: str | None = None
 
     def matches(self, paper: Paper) -> bool:
         if self.category and self.category not in paper.categories:
@@ -25,6 +34,8 @@ class SearchFilters:
             needle = self.author.casefold()
             if not any(needle in author.casefold() for author in paper.authors):
                 return False
+        if self.source and self.source != paper.source:
+            return False
         return True
 
 

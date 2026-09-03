@@ -1,6 +1,7 @@
 from fastapi.testclient import TestClient
 
 from nlp_academic_search.api.main import create_app
+from nlp_academic_search.config import settings
 from nlp_academic_search.rag.generator import ModelUnavailableError
 
 
@@ -98,3 +99,17 @@ def test_readiness_fails_when_rag_model_is_unavailable(services, monkeypatch):
     with TestClient(create_app(services)) as client:
         assert client.get("/health/ready").status_code == 503
         assert client.get("/health").json()["status"] == "degraded"
+
+
+def test_bearer_auth_protects_api_but_not_liveness(services, monkeypatch):
+    monkeypatch.setattr(settings, "backend_api_token", "backend-secret")
+    monkeypatch.setattr(services, "ollama_available", lambda: True)
+    with TestClient(create_app(services)) as client:
+        assert client.get("/health/live").status_code == 200
+        assert client.get("/api/v1/search", params={"q": "attention"}).status_code == 401
+        authorized = client.get(
+            "/api/v1/search",
+            params={"q": "attention"},
+            headers={"Authorization": "Bearer backend-secret"},
+        )
+        assert authorized.status_code == 200

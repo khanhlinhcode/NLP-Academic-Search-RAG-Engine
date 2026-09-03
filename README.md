@@ -28,6 +28,7 @@ Streamlit và Ollama.
 - [13. Cấu hình và bảo mật](#13-cấu-hình-và-bảo-mật)
 - [14. Giới hạn hiện tại](#14-giới-hạn-hiện-tại)
 - [15. Tài liệu liên quan](#15-tài-liệu-liên-quan)
+- [16. Cloud deployment](#16-cloud-deployment)
 
 ## 1. Mục tiêu và phạm vi
 
@@ -428,9 +429,36 @@ sanitized errors. Ứng dụng chưa có multi-tenant authorization hoặc distr
 - [Product](docs/product.md): mục tiêu, người dùng và nguyên tắc sản phẩm.
 - [Design](docs/design.md): hệ thống thiết kế và hành vi giao diện.
 - [Data Card](docs/cards/data-card.md): nguồn dữ liệu, quy trình thu thập, schema và giới hạn.
+
+## 16. Cloud deployment
+
+Dự án có hai profile độc lập:
+
+| Profile | Retrieval | Generation | Mục đích |
+|---|---|---|---|
+| `local` | `rank-bm25` + Sentence-Transformer/FAISS + RRF | Ollama | Nghiên cứu, benchmark và chạy offline |
+| `cloud` | Qdrant Cloud dense + BM25 + server-side RRF | Groq | Demo tách UI/API trên free tiers |
+
+Cloud topology:
+
+```text
+Streamlit Community Cloud -> Render FastAPI -> Qdrant Cloud + Groq
+```
+
+Render image không chứa Torch, Sentence-Transformers, FAISS, Ollama, corpus hoặc model weights.
+Đọc hướng dẫn theo thứ tự:
+
+1. [Deployment architecture](docs/deployment/architecture.md)
+2. [Qdrant Cloud migration](docs/deployment/qdrant-cloud.md)
+3. [Render backend](docs/deployment/render-backend.md)
+4. [Streamlit Community Cloud](docs/deployment/streamlit-cloud.md)
+5. [Operations](docs/deployment/operations.md)
+6. [Troubleshooting](docs/deployment/troubleshooting.md)
+
+Các free tier có cold start, hibernation và quota; cấu hình này dành cho research/demo, không cung
+cấp production SLA.
 - [Model Card](docs/cards/model-card.md): mô hình embedding, reranker, generator và latency.
 - [Threat Model & Security](docs/security/threat-model.md): phân tích mối đe dọa và kiểm thử an toàn.
 - [Experiment Configurations](configs/experiments/): cấu hình thử nghiệm có thể tái lập (TOML).
 - [Contributing](CONTRIBUTING.md): cách thiết lập môi trường và quality gate cho thay đổi mới.
 - [LICENSE](LICENSE): giấy phép MIT.
-

@@ -61,6 +61,25 @@ class APIConfig(BaseModel):
     concurrency_limit: int
 
 
+class QdrantConfig(BaseModel):
+    url: str | None
+    api_key: str | None
+    collection_alias: str
+    dense_model: str | None
+    sparse_model: str
+    timeout_seconds: float
+    expected_corpus_sha256: str | None
+    expected_schema_version: int
+
+
+class GroqConfig(BaseModel):
+    base_url: str
+    api_key: str | None
+    model_name: str
+    timeout_seconds: float
+    max_output_tokens: int
+
+
 class Settings(BaseSettings):
     """Single source of truth for process configuration."""
 
@@ -69,6 +88,10 @@ class Settings(BaseSettings):
     )
 
     environment: Literal["local", "test", "production"] = "local"
+    deployment_profile: Literal["local", "cloud"] = "local"
+    retrieval_provider: Literal["local", "qdrant"] = "local"
+    generation_provider: Literal["ollama", "groq"] = "ollama"
+    reranker_provider: Literal["local", "disabled"] = "local"
     ollama_base_url: AnyHttpUrl = "http://localhost:11434"  # type: ignore[assignment]
     llm_model_name: str = "qwen2.5:7b"
     generation_timeout_seconds: float = Field(default=120.0, gt=0, le=600)
@@ -97,8 +120,34 @@ class Settings(BaseSettings):
     rag_min_relevance_score: float = Field(default=0.2, ge=-1, le=1)
     rag_max_context_chars: int = Field(default=24000, ge=1000, le=200000)
     rag_enabled: bool = True
+    qdrant_url: str | None = None
+    qdrant_api_key: str | None = None
+    qdrant_collection_alias: str = "academic-papers-current"
+    qdrant_dense_model: str | None = None
+    qdrant_sparse_model: str = "qdrant/bm25"
+    qdrant_timeout_seconds: float = Field(default=15.0, gt=0, le=120)
+    qdrant_expected_corpus_sha256: str | None = None
+    qdrant_expected_schema_version: int = Field(default=1, ge=1)
+    groq_api_base_url: AnyHttpUrl = "https://api.groq.com/openai/v1"  # type: ignore[assignment]
+    groq_api_key: str | None = None
+    groq_model: str = "openai/gpt-oss-20b"
+    groq_timeout_seconds: float = Field(default=120.0, gt=0, le=600)
+    groq_max_output_tokens: int = Field(default=1024, ge=1, le=65536)
+    backend_api_token: str | None = None
+    allow_degraded_retrieval: bool = False
+    health_cache_seconds: float = Field(default=10.0, ge=0, le=300)
+    search_rate_limit_per_minute: int = Field(default=60, ge=1, le=10000)
+    ask_rate_limit_per_minute: int = Field(default=10, ge=1, le=10000)
 
-    @field_validator("llm_model_name", "embedding_model_name", "reranker_model_name", mode="before")
+    @field_validator(
+        "llm_model_name",
+        "embedding_model_name",
+        "reranker_model_name",
+        "groq_model",
+        "qdrant_collection_alias",
+        "qdrant_sparse_model",
+        mode="before",
+    )
     @classmethod
     def model_names_must_not_be_blank(cls, value: object) -> object:
         if not isinstance(value, str) or not value.strip():
@@ -126,6 +175,26 @@ class Settings(BaseSettings):
             raise ValueError("SEARCH_CANDIDATE_POOL must be >= DEFAULT_TOP_K")
         if self.environment == "production" and "*" in self.cors_origin_list:
             raise ValueError("CORS_ORIGINS cannot contain '*' in production")
+        if self.deployment_profile == "cloud":
+            if self.retrieval_provider != "qdrant":
+                raise ValueError("cloud profile requires RETRIEVAL_PROVIDER=qdrant")
+            if self.generation_provider != "groq":
+                raise ValueError("cloud profile requires GENERATION_PROVIDER=groq")
+            if self.reranker_provider != "disabled":
+                raise ValueError("cloud profile requires RERANKER_PROVIDER=disabled")
+            missing = [
+                name
+                for name, value in (
+                    ("QDRANT_URL", self.qdrant_url),
+                    ("QDRANT_API_KEY", self.qdrant_api_key),
+                    ("QDRANT_DENSE_MODEL", self.qdrant_dense_model),
+                )
+                if not value
+            ]
+            if missing:
+                raise ValueError(f"cloud profile is missing {', '.join(missing)}")
+            if self.environment == "production" and not self.backend_api_token:
+                raise ValueError("production cloud profile requires BACKEND_API_TOKEN")
         return self
 
     @property
@@ -186,6 +255,35 @@ class Settings(BaseSettings):
             cors_origins=self.cors_origin_list,
             request_timeout_seconds=self.api_request_timeout_seconds,
             concurrency_limit=self.api_concurrency_limit,
+        )
+
+    @property
+    def qdrant(self) -> QdrantConfig:
+        return QdrantConfig(
+            url=self.qdrant_url,
+            api_key=self.qdrant_api_key,
+            collection_alias=self.qdrant_collection_alias,
+            dense_model=self.qdrant_dense_model,
+            sparse_model=self.qdrant_sparse_model,
+            timeout_seconds=self.qdrant_timeout_seconds,
+            expected_corpus_sha256=self.qdrant_expected_corpus_sha256,
+            expected_schema_version=self.qdrant_expected_schema_version,
+        )
+
+    @property
+    def groq(self) -> GroqConfig:
+        return GroqConfig(
+            base_url=str(self.groq_api_base_url).rstrip("/"),
+            api_key=self.groq_api_key,
+            model_name=self.groq_model,
+            timeout_seconds=self.groq_timeout_seconds,
+            max_output_tokens=self.groq_max_output_tokens,
+        )
+
+    @property
+    def active_generation_model(self) -> str:
+        return (
+            self.groq.model_name if self.generation_provider == "groq" else self.ollama.model_name
         )
 
 

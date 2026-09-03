@@ -52,6 +52,19 @@ def test_client_uses_method_specific_search_path():
     assert response["method"] == "semantic"
 
 
+def test_client_sends_backend_bearer_token():
+    def handler(request: httpx.Request) -> httpx.Response:
+        assert request.headers["authorization"] == "Bearer backend-secret"
+        return httpx.Response(200, json={"status": "ready"})
+
+    client = AcademicSearchClient(
+        "https://backend.test",
+        api_token="backend-secret",
+        transport=httpx.MockTransport(handler),
+    )
+    assert client.health()["status"] == "ready"
+
+
 def test_client_stream_answer_parses_api_stream():
     def handler(request: httpx.Request) -> httpx.Response:
         body = json.loads(request.content)

@@ -6,7 +6,6 @@ import os
 from typing import Any
 
 import numpy as np
-from sentence_transformers import CrossEncoder
 
 from nlp_academic_search.config import settings
 from nlp_academic_search.search.models import SearchResult
@@ -21,7 +20,16 @@ class Reranker:
         model: Any | None = None,
     ) -> None:
         self.model_name = model_name or settings.reranker.model_name
-        self.model = model or CrossEncoder(self.model_name, device=device)
+        self.device = device
+        self._model = model
+
+    @property
+    def model(self) -> Any:
+        if self._model is None:
+            from sentence_transformers import CrossEncoder
+
+            self._model = CrossEncoder(self.model_name, device=self.device)
+        return self._model
 
     def rerank(self, query: str, results: list[SearchResult], top_k: int = 5) -> list[SearchResult]:
         if not results or top_k < 1:
