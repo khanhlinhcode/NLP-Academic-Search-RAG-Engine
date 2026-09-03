@@ -14,9 +14,8 @@ ENV PYTHONDONTWRITEBYTECODE=1 \
     PIP_NO_CACHE_DIR=1
 
 RUN groupadd --system app && useradd --system --gid app --create-home app
-WORKDIR /app
-COPY --from=builder /build/dist/*.whl /tmp/app.whl
-RUN python -m pip install /tmp/app.whl[ui] && rm /tmp/app.whl
+COPY --from=builder /build/dist /tmp/dist
+RUN python -m pip install /tmp/dist/*.whl[ui] && rm -rf /tmp/dist
 COPY scripts ./scripts
 RUN mkdir -p /app/data && chown -R app:app /app
 

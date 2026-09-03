@@ -33,10 +33,10 @@ Streamlit và Ollama.
 
 Dự án giải quyết hai tác vụ riêng biệt nhưng dùng chung một nền tảng dữ liệu:
 
-| Tác vụ | Mục tiêu | Đầu ra |
-|---|---|---|
-| **Search** | Tìm và xếp hạng papers phù hợp với một chủ đề. | Danh sách papers, metadata, score và liên kết nguồn. |
-| **Ask/RAG** | Tổng hợp câu trả lời chỉ từ evidence đã truy xuất. | Câu trả lời streaming, citation và Evidence ledger. |
+| Tác vụ      | Mục tiêu                                           | Đầu ra                                               |
+| ----------- | -------------------------------------------------- | ---------------------------------------------------- |
+| **Search**  | Tìm và xếp hạng papers phù hợp với một chủ đề.     | Danh sách papers, metadata, score và liên kết nguồn. |
+| **Ask/RAG** | Tổng hợp câu trả lời chỉ từ evidence đã truy xuất. | Câu trả lời streaming, citation và Evidence ledger.  |
 
 Thiết kế local-first giữ corpus, embeddings và LLM trên máy người dùng. FastAPI là lớp dịch vụ
 trung tâm; Streamlit chỉ giao tiếp với API và không trực tiếp tải index hoặc gọi model.
@@ -91,15 +91,15 @@ Browser ──► Streamlit UI ──HTTP/SSE──► FastAPI
 
 ### 3.2 Trách nhiệm của từng lớp
 
-| Lớp | Trách nhiệm |
-|---|---|
-| `data` | Mô hình `Paper`, ingestion adapter, làm sạch, validation và manifest. |
-| `search` | BM25, embedding/FAISS, fusion, filter và reranking. |
-| `rag` | Xây context/prompt, gọi Ollama, streaming và kiểm tra citation. |
-| `evaluation` | Metrics retrieval và RAG có thể chạy lặp lại. |
-| `api` | Contract HTTP, dependency lifecycle, timeout, concurrency và lỗi có cấu trúc. |
-| `ui` | Trình bày Search/Ask, trạng thái hệ thống và Evidence ledger. |
-| `scripts` | Entry point cho ingestion, indexing, audit và evaluation; không chứa business logic lõi. |
+| Lớp          | Trách nhiệm                                                                              |
+| ------------ | ---------------------------------------------------------------------------------------- |
+| `data`       | Mô hình `Paper`, ingestion adapter, làm sạch, validation và manifest.                    |
+| `search`     | BM25, embedding/FAISS, fusion, filter và reranking.                                      |
+| `rag`        | Xây context/prompt, gọi Ollama, streaming và kiểm tra citation.                          |
+| `evaluation` | Metrics retrieval và RAG có thể chạy lặp lại.                                            |
+| `api`        | Contract HTTP, dependency lifecycle, timeout, concurrency và lỗi có cấu trúc.            |
+| `ui`         | Trình bày Search/Ask, trạng thái hệ thống và Evidence ledger.                            |
+| `scripts`    | Entry point cho ingestion, indexing, audit và evaluation; không chứa business logic lõi. |
 
 Hướng phụ thuộc chính là `UI → API → domain services → data/config`. Các module retrieval và RAG
 không phụ thuộc giao diện, nhờ đó có thể kiểm thử độc lập và tái sử dụng qua API hoặc CLI.
@@ -297,16 +297,16 @@ lịch sử. Để có provenance đầy đủ, hãy ingest lại arXiv và ch�
 
 Các route ổn định nằm dưới `/api/v1`; route không version được giữ làm alias tương thích ngược.
 
-| Route | Chức năng |
-|---|---|
-| `GET /api/v1/search` | Hybrid RRF/weighted search, filter và pagination. |
-| `GET /api/v1/search/bm25` | Sparse retrieval. |
-| `GET /api/v1/search/semantic` | Dense FAISS retrieval. |
-| `POST /api/v1/ask` | Grounded answer không streaming. |
-| `POST /api/v1/ask/stream` | SSE gồm `stage`, `sources`, `token`, `warning`, `error`, `done`. |
-| `GET /health/live` | Process liveness. |
-| `GET /health/ready` | Readiness của corpus, index và RAG dependency. |
-| `GET /stats` | Metadata của corpus, index và model. |
+| Route                         | Chức năng                                                        |
+| ----------------------------- | ---------------------------------------------------------------- |
+| `GET /api/v1/search`          | Hybrid RRF/weighted search, filter và pagination.                |
+| `GET /api/v1/search/bm25`     | Sparse retrieval.                                                |
+| `GET /api/v1/search/semantic` | Dense FAISS retrieval.                                           |
+| `POST /api/v1/ask`            | Grounded answer không streaming.                                 |
+| `POST /api/v1/ask/stream`     | SSE gồm `stage`, `sources`, `token`, `warning`, `error`, `done`. |
+| `GET /health/live`            | Process liveness.                                                |
+| `GET /health/ready`           | Readiness của corpus, index và RAG dependency.                   |
+| `GET /stats`                  | Metadata của corpus, index và model.                             |
 
 Ví dụ:
 
@@ -340,11 +340,11 @@ make eval-retrieval
 Fixture `benchmarks/retrieval/in_domain_golden.json` kiểm tra pipeline và metrics. Lần chạy ghi nhận ngày
 2026-09-03 chỉ có 3 queries và 3 documents:
 
-| Method | Recall@3 | MRR@3 | MAP@3 | nDCG@3 | p50 latency |
-|---|---:|---:|---:|---:|---:|
-| BM25 | 0.6667 | 1.0000 | 0.6667 | 0.8842 | 0.05 ms |
-| Dense | 1.0000 | 1.0000 | 0.8889 | 0.9760 | 5.91 ms |
-| RRF | 1.0000 | 1.0000 | 0.8889 | 0.9760 | 5.43 ms |
+| Method | Recall@3 |  MRR@3 |  MAP@3 | nDCG@3 | p50 latency |
+| ------ | -------: | -----: | -----: | -----: | ----------: |
+| BM25   |   0.6667 | 1.0000 | 0.6667 | 0.8842 |     0.05 ms |
+| Dense  |   1.0000 | 1.0000 | 0.8889 | 0.9760 |     5.91 ms |
+| RRF    |   1.0000 | 1.0000 | 0.8889 | 0.9760 |     5.43 ms |
 
 Kết quả này xác nhận hành vi của code, không phải benchmark đủ mạnh. Có thể import BEIR/SciFact mà
 không sửa judgments:
@@ -433,3 +433,4 @@ sanitized errors. Ứng dụng chưa có multi-tenant authorization hoặc distr
 - [Experiment Configurations](configs/experiments/): cấu hình thử nghiệm có thể tái lập (TOML).
 - [Contributing](CONTRIBUTING.md): cách thiết lập môi trường và quality gate cho thay đổi mới.
 - [LICENSE](LICENSE): giấy phép MIT.
+
