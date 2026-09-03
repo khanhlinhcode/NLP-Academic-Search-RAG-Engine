@@ -6,10 +6,9 @@ Hệ thống local-first để tìm kiếm bài báo khoa học và hỏi đáp 
 Sentence-Transformers, FAISS, Reciprocal Rank Fusion (RRF), Cross-Encoder tùy chọn, FastAPI,
 Streamlit và Ollama.
 
-> **Trạng thái:** hardened local MVP. Dự án đã có cấu hình typed, corpus/index manifest, timeout,
-> giới hạn concurrency, lỗi có cấu trúc, kiểm tra citation, test tự động, CI và container. Dự án
-> chưa được tuyên bố production-ready vì chưa hoàn tất benchmark chuẩn SciFact/BEIR, đánh giá
-> faithfulness theo semantic entailment và kiểm thử tải/bảo mật ở quy mô production.
+> **Trạng thái:** Production Pilot (Semantically Verified RAG). Hệ thống đã tích hợp xác thực
+> 2 lớp: Layer 1 Structural Citation Validation và Layer 2 Semantic Evidence Verification qua Groq JSON Schema.
+> Tích hợp 1-pass answer repair, fail-closed safety policy, test coverage >= 80% và hoàn thành các quality gate.
 
 ## Mục lục
 
@@ -51,10 +50,10 @@ trung tâm; Streamlit chỉ giao tiếp với API và không trực tiếp tải
 - Semantic index phải có `index_manifest.json` ràng buộc corpus hash, thứ tự document ID, số lượng
   và chiều vector, embedding model/revision, chuẩn hóa, loại FAISS và phiên bản thư viện.
 - Nội dung paper được coi là **untrusted evidence**, không phải instruction cho LLM.
-- Citation validator kiểm tra index nguồn và độ phủ citation một cách xác định. Đây là kiểm tra cấu
-  trúc, chưa phải xác minh đầy đủ rằng mọi mệnh đề được nguồn hỗ trợ về mặt ngữ nghĩa.
-- Cross-Encoder mặc định tắt cho đến khi một validation set độc lập chứng minh nó cải thiện chất
-  lượng đủ để bù chi phí latency.
+- Citation validator kiểm tra xác minh 2 lớp:
+  - **Layer 1 (Structural):** Kiểm tra index nguồn và độ phủ trích dẫn theo từng câu factual.
+  - **Layer 2 (Semantic Evidence):** Xác minh bằng chứng ngữ nghĩa qua Groq strict JSON schema. Server tự động kiểm tra exact evidence quote trong retrieved source (NFKC normalized) và kiểm tra tính độc lập của verifier.
+- Hệ thống hỗ trợ chính sách **Fail-Closed**: Nếu bằng chứng không thể xác thực ngữ nghĩa, câu trả lời sẽ bị thu hồi (`refused_unverified`) thay vì trả về nội dung chưa qua kiểm chứng.
 
 Corpus runtime nằm trong `data/`, không được commit vào Git. Vì vậy số papers thực tế có thể là
 corpus legacy 15.000 bản ghi hoặc một corpus arXiv mới với metadata đã xác minh.
@@ -84,10 +83,19 @@ Browser ──► Streamlit UI ──HTTP/SSE──► FastAPI
                          ┌───────────────┴────────────────┐
                          ▼                                ▼
                   Retrieval service                 RAG service
-            BM25 + FAISS → RRF → rerank?      retrieve → context → Ollama
+            BM25 + FAISS → RRF → rerank?      retrieve → context → LLM (Ollama/Groq)
                          │                                │
                          ▼                                ▼
-                 ranked papers                  answer + citations
+                 ranked papers             Layer 1 Structural Check
+                                                          │
+                                                          ▼
+                                                   Layer 2 Semantic Verifier (Groq)
+                                                          │
+                                                          ▼
+                                                   1-Pass Repair / Refusal
+                                                          │
+                                                          ▼
+                                                  answer + verified metadata
 ```
 
 ### 3.2 Trách nhiệm của từng lớp
@@ -96,8 +104,8 @@ Browser ──► Streamlit UI ──HTTP/SSE──► FastAPI
 | ------------ | ---------------------------------------------------------------------------------------- |
 | `data`       | Mô hình `Paper`, ingestion adapter, làm sạch, validation và manifest.                    |
 | `search`     | BM25, embedding/FAISS, fusion, filter và reranking.                                      |
-| `rag`        | Xây context/prompt, gọi Ollama, streaming và kiểm tra citation.                          |
-| `evaluation` | Metrics retrieval và RAG có thể chạy lặp lại.                                            |
+| `rag`        | Xây context/prompt, generator, 2-layer verifier, streaming và repair logic.             |
+| `evaluation` | Metrics retrieval và RAG (Source utilization, Citation coverage, Evidence validity).    |
 | `api`        | Contract HTTP, dependency lifecycle, timeout, concurrency và lỗi có cấu trúc.            |
 | `ui`         | Trình bày Search/Ask, trạng thái hệ thống và Evidence ledger.                            |
 | `scripts`    | Entry point cho ingestion, indexing, audit và evaluation; không chứa business logic lõi. |
@@ -140,13 +148,15 @@ context budget: title + metadata + abstract + stable source index
    ↓
 system policy + untrusted evidence + user question
    ↓
-Ollama / qwen2.5:7b
+Ollama / Groq LLM Generator
    ↓
-SSE: stage → sources → token
+SSE Stream: stage → sources → tokens
    ↓
-citation_validation → citation_repair? → answer_replacement? → done
+structural_validation → semantic_validation (Groq JSON Schema)
    ↓
-final answer + strict citation metadata + Evidence ledger
+answer_repair? (max 1-pass) → answer_replacement? → final_validation
+   ↓
+final verified answer / refused_unverified + strict citation metadata + Evidence ledger
 ```
 
 Nếu evidence không vượt ngưỡng phù hợp, hệ thống nên từ chối trả lời thay vì để model đoán. Mỗi
