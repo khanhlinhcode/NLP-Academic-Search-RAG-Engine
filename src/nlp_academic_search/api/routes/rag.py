@@ -4,7 +4,9 @@ from __future__ import annotations
 
 import json
 import time
+import asyncio
 from collections.abc import AsyncGenerator, Generator
+from dataclasses import dataclass
 from typing import Annotated
 
 from fastapi import APIRouter, Depends, Request
@@ -26,22 +28,158 @@ from nlp_academic_search.providers.generation.base import (
     ModelUnavailableError,
     RAGGenerationError,
 )
-from nlp_academic_search.rag.citations import validate_citations
+from nlp_academic_search.rag.citations import CitationValidation, validate_citations
 from nlp_academic_search.rag.prompt_builder import (
     PROMPT_VERSION,
     InsufficientContextError,
     PromptPackage,
+    build_citation_repair_messages,
     build_rag_messages,
     build_source_list,
 )
+from nlp_academic_search.rag.verification import SemanticValidation, validate_semantic_assessment
+from nlp_academic_search.providers.verification.base import SemanticVerificationError
 
 router = APIRouter(prefix="/ask", tags=["RAG"])
 Services = Annotated[ServiceContainer, Depends(get_services)]
 REFUSAL = "Not enough evidence in the retrieved sources."
 
 
+@dataclass(frozen=True)
+class CitationOutcome:
+    answer: str
+    validation: CitationValidation
+    semantic_validation: SemanticValidation | None = None
+    repair_attempted: bool = False
+    repair_succeeded: bool | None = None
+    semantic_attempted: bool = False
+    semantic_succeeded: bool | None = None
+    answer_status: str = "structurally_valid"
+    verification_latency_ms: float = 0.0
+    warning: str | None = None
+
+
 def _sse_event(event: str, payload: dict[str, object]) -> str:
     return f"event: {event}\ndata: {json.dumps(payload, ensure_ascii=False)}\n\n"
+
+
+def _validation_quality(validation: CitationValidation) -> tuple[int, int, int, float, float]:
+    return (
+        int(validation.valid),
+        -len(validation.invalid_indices),
+        -validation.uncited_claim_count,
+        validation.claim_citation_coverage,
+        validation.citation_precision,
+    )
+
+
+def _verify(
+    services: ServiceContainer, package: PromptPackage, answer: str
+) -> tuple[SemanticValidation | None, float, str | None]:
+    """Run the optional judge and retain only locally checked evidence spans."""
+    if not settings.verification.enabled:
+        return None, 0.0, None
+    verifier = services.semantic_verifier
+    if verifier is None:
+        return None, 0.0, "Semantic verification is unavailable."
+    started = time.perf_counter()
+    try:
+        result = verifier.assess(package.messages[-1]["content"], answer, package.papers)
+        claims = result["claims"]
+        validation = validate_semantic_assessment(
+            answer,
+            package.papers,
+            claims,
+            provider=verifier.provider_name,
+            model=verifier.model_name,
+            independent=verifier.verifier_independent,
+        )
+        return validation, (time.perf_counter() - started) * 1000, None
+    except (SemanticVerificationError, RuntimeError, KeyError, TypeError) as exc:
+        return None, (time.perf_counter() - started) * 1000, str(exc)
+
+
+def _status_for(
+    structural: CitationValidation, semantic: SemanticValidation | None, verifier_error: str | None
+) -> str:
+    if structural.valid and semantic is not None and semantic.valid:
+        return "verified"
+    if structural.valid and not settings.verification.enabled:
+        return "structurally_valid"
+    if structural.valid and verifier_error:
+        return "verification_unavailable"
+    if structural.valid:
+        return "verification_unavailable"
+    return "refused_unverified" if settings.verification.fail_closed else "structurally_valid"
+
+
+def _validate_and_repair_sync(
+    services: ServiceContainer,
+    package: PromptPackage,
+    answer: str,
+) -> CitationOutcome:
+    initial = validate_citations(answer, len(package.papers))
+    semantic, latency, verifier_error = _verify(services, package, answer) if initial.valid else (None, 0.0, None)
+    status = _status_for(initial, semantic, verifier_error)
+    needs_repair = not initial.valid or (initial.valid and semantic is not None and not semantic.valid)
+    if not needs_repair or settings.verification.max_repair_attempts == 0:
+        return CitationOutcome(answer, initial, semantic, False, None, settings.verification.enabled, semantic.valid if semantic else None, status, latency, verifier_error)
+    if services.rag_generator is None:
+        raise ModelUnavailableError("Generation provider is not configured")
+    try:
+        repaired = services.rag_generator.generate(build_citation_repair_messages(package, answer), temperature=0.0).strip()
+        if not repaired:
+            raise GenerationInvalidResponseError("Citation repair returned an empty answer")
+    except RAGGenerationError:
+        repaired = answer
+    final_structural = validate_citations(repaired, len(package.papers))
+    final_semantic, repair_latency, final_error = _verify(services, package, repaired) if final_structural.valid else (None, 0.0, None)
+    final_status = _status_for(final_structural, final_semantic, final_error)
+    final_valid = final_structural.valid and final_status in {"verified", "structurally_valid"} and not (
+        settings.verification.enabled and settings.verification.fail_closed and final_status != "verified"
+    )
+    if not final_valid and settings.verification.fail_closed:
+        return CitationOutcome(REFUSAL, validate_citations(REFUSAL, 0), final_semantic, True, False, settings.verification.enabled, bool(final_semantic and final_semantic.valid), "refused_unverified", latency + repair_latency, "Answer withheld because evidence could not be verified.")
+    return CitationOutcome(repaired, final_structural, final_semantic, True, final_valid, settings.verification.enabled, bool(final_semantic and final_semantic.valid), final_status, latency + repair_latency, final_error)
+
+
+async def _validate_and_repair_async(
+    services: ServiceContainer,
+    package: PromptPackage,
+    answer: str,
+) -> CitationOutcome:
+    initial = validate_citations(answer, len(package.papers))
+    semantic, latency, verifier_error = (
+        await asyncio.to_thread(_verify, services, package, answer)
+        if initial.valid
+        else (None, 0.0, None)
+    )
+    status = _status_for(initial, semantic, verifier_error)
+    needs_repair = not initial.valid or (initial.valid and semantic is not None and not semantic.valid)
+    if not needs_repair or settings.verification.max_repair_attempts == 0:
+        return CitationOutcome(answer, initial, semantic, False, None, settings.verification.enabled, semantic.valid if semantic else None, status, latency, verifier_error)
+    if services.rag_generator is None:
+        raise ModelUnavailableError("Generation provider is not configured")
+    try:
+        parts = [token async for token in services.rag_generator.generate_stream_async(build_citation_repair_messages(package, answer), temperature=0.0)]
+        repaired = "".join(parts).strip()
+        if not repaired:
+            raise GenerationInvalidResponseError("Citation repair returned an empty answer")
+    except RAGGenerationError:
+        repaired = answer
+    final_structural = validate_citations(repaired, len(package.papers))
+    final_semantic, repair_latency, final_error = (
+        await asyncio.to_thread(_verify, services, package, repaired)
+        if final_structural.valid
+        else (None, 0.0, None)
+    )
+    final_status = _status_for(final_structural, final_semantic, final_error)
+    final_valid = final_structural.valid and final_status in {"verified", "structurally_valid"} and not (
+        settings.verification.enabled and settings.verification.fail_closed and final_status != "verified"
+    )
+    if not final_valid and settings.verification.fail_closed:
+        return CitationOutcome(REFUSAL, validate_citations(REFUSAL, 0), final_semantic, True, False, settings.verification.enabled, bool(final_semantic and final_semantic.valid), "refused_unverified", latency + repair_latency, "Answer withheld because evidence could not be verified.")
+    return CitationOutcome(repaired, final_structural, final_semantic, True, final_valid, settings.verification.enabled, bool(final_semantic and final_semantic.valid), final_status, latency + repair_latency, final_error)
 
 
 def _prepare(
@@ -76,12 +214,15 @@ def _metadata(
     retrieval_ms: float,
     generation_ms: float,
     warnings: list[str],
-    answer: str,
+    outcome: CitationOutcome,
 ) -> AnswerMetadata:
     if services.rag_generator is None:
         raise ModelUnavailableError("Generation provider is not configured")
-    citation_validation = validate_citations(answer, len(sources))
-    warnings.extend(citation_validation.warnings)
+    if outcome.warning:
+        warnings.append(outcome.warning)
+    warnings.extend(outcome.validation.warnings)
+    if outcome.semantic_validation:
+        warnings.extend(outcome.semantic_validation.warnings)
     return AnswerMetadata(
         model=services.rag_generator.model_name,
         retrieval_method=retrieval_method,
@@ -93,9 +234,18 @@ def _metadata(
             retrieval_ms=round(retrieval_ms, 2),
             generation_ms=round(generation_ms, 2),
             total_ms=round(retrieval_ms + generation_ms, 2),
+            verification_ms=round(outcome.verification_latency_ms, 2),
         ),
         warnings=list(dict.fromkeys(warnings)),
-        citation_validation=citation_validation,
+        citation_validation=outcome.validation,
+        citation_repair_attempted=outcome.repair_attempted,
+        citation_repair_succeeded=outcome.repair_succeeded,
+        answer_status=outcome.answer_status,  # type: ignore[arg-type]
+        semantic_validation=outcome.semantic_validation,
+        semantic_verification_attempted=outcome.semantic_attempted,
+        semantic_verification_succeeded=outcome.semantic_succeeded,
+        final_answer_replaced=outcome.repair_attempted,
+        verification_latency_ms=round(outcome.verification_latency_ms, 2),
     )
 
 
@@ -121,12 +271,14 @@ def ask_question(payload: AskRequest, services: Services) -> AskResponse:
                 latencies=StageLatencies(retrieval_ms=0, generation_ms=0, total_ms=0),
                 warnings=["No relevant context was retrieved; the model was not called."],
                 citation_validation=validation,
+                answer_status="refused_insufficient_context",
             ),
         )
     services.acquire_generation()
     generated_at = time.perf_counter()
     try:
         answer = services.rag_generator.generate(package.messages)  # type: ignore[attr-defined]
+        outcome = _validate_and_repair_sync(services, package, answer)
     finally:
         services.release_generation()
     generation_ms = (time.perf_counter() - generated_at) * 1000
@@ -138,9 +290,14 @@ def ask_question(payload: AskRequest, services: Services) -> AskResponse:
         retrieval_ms=retrieval_ms,
         generation_ms=generation_ms,
         warnings=warnings,
-        answer=answer,
+        outcome=outcome,
     )
-    return AskResponse(question=payload.question, answer=answer, sources=sources, metadata=metadata)
+    return AskResponse(
+        question=payload.question,
+        answer=outcome.answer,
+        sources=sources,
+        metadata=metadata,
+    )
 
 
 @router.post("/stream", summary="Streaming grounded question answering")
@@ -158,10 +315,7 @@ def ask_question_stream(
                 {"message": "No relevant context was retrieved; the model was not called."},
             )
             yield _sse_event("token", {"token": REFUSAL})
-            yield _sse_event(
-                "done",
-                {"metadata": {"citation_validation": validate_citations(REFUSAL, 0).model_dump()}},
-            )
+            yield _sse_event("done", {"metadata": {"citation_validation": validate_citations(REFUSAL, 0).model_dump(), "answer_status": "refused_insufficient_context"}})
 
         return StreamingResponse(refuse(), media_type="text/event-stream")
 
@@ -189,6 +343,25 @@ def ask_question_stream(
                     break
                 answer_parts.append(token)
                 yield _sse_event("token", {"token": token})
+            answer = "".join(answer_parts).strip()
+            if not answer:
+                raise GenerationInvalidResponseError("Generation provider returned an empty answer")
+            yield _sse_event("stage", {"name": "structural_validation", "status": "running"})
+            # Compatibility alias retained for existing v1 SSE consumers.
+            yield _sse_event("stage", {"name": "citation_validation", "status": "running"})
+            initial_validation = validate_citations(answer, len(sources))
+            yield _sse_event("stage", {"name": "structural_validation", "status": "complete" if initial_validation.valid else "needs_repair"})
+            yield _sse_event("stage", {"name": "citation_validation", "status": "complete" if initial_validation.valid else "needs_repair"})
+            if initial_validation.valid and settings.verification.enabled:
+                yield _sse_event("stage", {"name": "semantic_validation", "status": "running"})
+            outcome = await _validate_and_repair_async(services, package, answer)
+            if settings.verification.enabled:
+                yield _sse_event("stage", {"name": "semantic_validation", "status": "complete" if outcome.semantic_validation and outcome.semantic_validation.valid else "unavailable" if outcome.answer_status == "verification_unavailable" else "needs_repair"})
+            if outcome.repair_attempted:
+                yield _sse_event("stage", {"name": "answer_repair", "status": "complete" if outcome.repair_succeeded else "failed"})
+            if outcome.answer != answer:
+                yield _sse_event("answer_replacement", {"answer": outcome.answer})
+            yield _sse_event("stage", {"name": "final_validation", "status": "complete" if outcome.answer_status in {"verified", "structurally_valid"} else "failed"})
             generation_ms = (time.perf_counter() - generated_at) * 1000
             metadata = _metadata(
                 services=services,
@@ -198,11 +371,17 @@ def ask_question_stream(
                 retrieval_ms=retrieval_ms,
                 generation_ms=generation_ms,
                 warnings=warnings,
-                answer="".join(answer_parts),
+                outcome=outcome,
             )
             for warning in metadata.warnings:
                 yield _sse_event("warning", {"message": warning})
-            yield _sse_event("stage", {"name": "generation", "status": "complete"})
+            yield _sse_event(
+                "stage",
+                {
+                    "name": "generation",
+                    "status": "complete" if outcome.answer_status in {"verified", "structurally_valid"} else "needs_review",
+                },
+            )
             yield _sse_event("done", {"metadata": metadata.model_dump(mode="json")})
         except (
             ServiceBusyError,

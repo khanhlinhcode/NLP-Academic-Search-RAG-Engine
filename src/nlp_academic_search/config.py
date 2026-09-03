@@ -82,6 +82,15 @@ class GroqConfig(BaseModel):
     max_output_tokens: int
 
 
+class VerificationConfig(BaseModel):
+    enabled: bool
+    provider: Literal["groq", "disabled"]
+    model_name: str
+    timeout_seconds: float
+    fail_closed: bool
+    max_repair_attempts: int
+
+
 class Settings(BaseSettings):
     """Single source of truth for process configuration."""
 
@@ -137,6 +146,12 @@ class Settings(BaseSettings):
     groq_reasoning_effort: Literal["low", "medium", "high"] | None = None
     groq_timeout_seconds: float = Field(default=120.0, gt=0, le=600)
     groq_max_output_tokens: int = Field(default=1024, ge=1, le=65536)
+    semantic_verification_enabled: bool = False
+    verification_provider: Literal["groq", "disabled"] = "disabled"
+    verification_model_name: str | None = None
+    verification_timeout_seconds: float = Field(default=30.0, gt=0, le=300)
+    verification_fail_closed: bool = False
+    max_rag_repair_attempts: int = Field(default=1, ge=0, le=1)
     backend_api_token: str | None = None
     allow_degraded_retrieval: bool = False
     health_cache_seconds: float = Field(default=10.0, ge=0, le=300)
@@ -216,6 +231,10 @@ class Settings(BaseSettings):
                 raise ValueError(f"cloud profile is missing {', '.join(missing)}")
             if self.environment == "production" and not self.backend_api_token:
                 raise ValueError("production cloud profile requires BACKEND_API_TOKEN")
+        if self.semantic_verification_enabled and self.verification_provider == "disabled":
+            raise ValueError("SEMANTIC_VERIFICATION_ENABLED requires VERIFICATION_PROVIDER")
+        if self.verification_fail_closed and not self.semantic_verification_enabled:
+            raise ValueError("VERIFICATION_FAIL_CLOSED requires SEMANTIC_VERIFICATION_ENABLED")
         return self
 
     @property
@@ -301,6 +320,17 @@ class Settings(BaseSettings):
             reasoning_effort=self.groq_reasoning_effort,
             timeout_seconds=self.groq_timeout_seconds,
             max_output_tokens=self.groq_max_output_tokens,
+        )
+
+    @property
+    def verification(self) -> VerificationConfig:
+        return VerificationConfig(
+            enabled=self.semantic_verification_enabled,
+            provider=self.verification_provider,
+            model_name=self.verification_model_name or self.groq.model_name,
+            timeout_seconds=self.verification_timeout_seconds,
+            fail_closed=self.verification_fail_closed,
+            max_repair_attempts=self.max_rag_repair_attempts,
         )
 
     @property

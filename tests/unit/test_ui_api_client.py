@@ -15,6 +15,9 @@ def test_iter_sse_decodes_structured_events():
         "event: token",
         'data: {"token": "Hello"}',
         "",
+        "event: answer_replacement",
+        'data: {"answer": "Hello [1]."}',
+        "",
         "event: done",
         'data: {"latency_ms": 12.4}',
         "",
@@ -22,10 +25,16 @@ def test_iter_sse_decodes_structured_events():
 
     events = list(_iter_sse(lines))
 
-    assert [event["event"] for event in events] == ["sources", "token", "done"]
+    assert [event["event"] for event in events] == [
+        "sources",
+        "token",
+        "answer_replacement",
+        "done",
+    ]
     assert events[0]["data"]["sources"][0]["index"] == 1
     assert events[1]["data"]["token"] == "Hello"
-    assert events[2]["data"]["latency_ms"] == 12.4
+    assert events[2]["data"]["answer"] == "Hello [1]."
+    assert events[3]["data"]["latency_ms"] == 12.4
 
 
 def test_client_uses_method_specific_search_path():

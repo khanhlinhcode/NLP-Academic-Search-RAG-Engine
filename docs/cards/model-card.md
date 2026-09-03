@@ -23,8 +23,9 @@ claims outside the corpus, or multi-tenant production use without additional con
   manifest instead of assumed by documentation.
 - Generator input: a system grounding policy and XML-delimited untrusted source excerpts.
 - Generator output: text or SSE tokens with numbered citations.
-- Citation validation is structural. It detects invalid indices and likely uncited sentences but
-  does not prove semantic entailment.
+- Citation validation is sentence-scoped and structural. It detects invalid indices and uncited
+  factual sentences, then permits at most one bounded repair pass. It does not prove semantic
+  entailment between a cited source and the claim.
 
 The default context budget is 24,000 characters. If a source exceeds the remaining budget, the
 current implementation truncates its abstract by character count and appends an ellipsis; it does

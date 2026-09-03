@@ -21,6 +21,7 @@ from nlp_academic_search.providers.retrieval.base import (
     RetrievalProvider,
     RetrievalStatus,
 )
+from nlp_academic_search.providers.verification.base import SemanticVerificationProvider
 from nlp_academic_search.search.models import FusionMethod, SearchFilters, SearchResult
 
 T = TypeVar("T")
@@ -43,6 +44,7 @@ class ServiceContainer:
     rag_generator: GenerationProvider | Any | None = None
     reranker: RerankerProvider | Any | None = None
     retrieval_provider: RetrievalProvider | None = None
+    semantic_verifier: SemanticVerificationProvider | None = None
     started_at: float = field(default_factory=time.monotonic)
     executor: ThreadPoolExecutor = field(
         default_factory=lambda: ThreadPoolExecutor(
@@ -165,6 +167,12 @@ class ServiceContainer:
         checker = getattr(self.rag_generator, "is_available", None)
         return bool(checker()) if callable(checker) else False
 
+    def semantic_verification_available(self) -> bool:
+        if not settings.verification.enabled or self.semantic_verifier is None:
+            return False
+        checker = getattr(self.semantic_verifier, "is_available", None)
+        return bool(checker()) if callable(checker) else False
+
     def retrieval_status(self, *, use_cache: bool = True) -> RetrievalStatus:
         now = time.monotonic()
         if (
@@ -213,6 +221,10 @@ class ServiceContainer:
             close = getattr(self.rag_generator, "close", None)
             if callable(close):
                 close()
+        if self.semantic_verifier is not None:
+            close = getattr(self.semantic_verifier, "close", None)
+            if callable(close):
+                close()
 
 
 def build_services() -> ServiceContainer:
@@ -228,6 +240,7 @@ def build_services() -> ServiceContainer:
         reranker=providers.reranker,
         retrieval_provider=providers.retrieval,
         rag_generator=providers.generation,
+        semantic_verifier=providers.verifier,
     )
 
 

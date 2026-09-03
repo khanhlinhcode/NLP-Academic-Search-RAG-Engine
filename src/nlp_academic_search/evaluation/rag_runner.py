@@ -27,8 +27,16 @@ class RAGAggregate(TypedDict):
     faithfulness_proxy: float | None
     citation_precision: float | None
     citation_coverage: float | None
+    source_utilization: float | None
+    claim_citation_coverage: float | None
     invalid_citation_rate: float | None
     refusal_correct: float | None
+    semantic_claim_coverage: float | None
+    unsupported_claim_count: float | None
+    insufficient_claim_count: float | None
+    evidence_quote_validity: float | None
+    verified_answer_rate: float | None
+    refused_verification_rate: float | None
     latency_p50_ms: float | None
     latency_p95_ms: float | None
     error_rate: float
@@ -165,8 +173,16 @@ def run_rag_evaluation(
         "faithfulness_proxy": _mean(successful, "faithfulness_proxy"),
         "citation_precision": _mean(successful, "citation_precision"),
         "citation_coverage": _mean(successful, "citation_coverage"),
+        "source_utilization": _mean(successful, "source_utilization"),
+        "claim_citation_coverage": _mean(successful, "claim_citation_coverage"),
         "invalid_citation_rate": _mean(successful, "invalid_citation_rate"),
         "refusal_correct": _mean(refusal, "refusal_correct"),
+        "semantic_claim_coverage": _mean(successful, "semantic_claim_coverage"),
+        "unsupported_claim_count": _mean(successful, "unsupported_claim_count"),
+        "insufficient_claim_count": _mean(successful, "insufficient_claim_count"),
+        "evidence_quote_validity": _mean(successful, "evidence_quote_validity"),
+        "verified_answer_rate": _mean(successful, "verified_answer"),
+        "refused_verification_rate": _mean(successful, "refused_verification"),
         "latency_p50_ms": round(float(np.percentile(latencies, 50)), 2) if latencies else None,
         "latency_p95_ms": round(float(np.percentile(latencies, 95)), 2) if latencies else None,
         "error_rate": round(failed / total, 4) if total else 0.0,
@@ -197,7 +213,7 @@ def run_rag_evaluation(
         "aggregate": aggregate,
         "cases": rows,
         "limitations": [
-            "faithfulness_proxy checks citation structure, not semantic entailment",
+            "faithfulness_proxy is deprecated and checks citation structure, not semantic entailment",
             "No external LLM judge was run; generator tag revision is not content-addressed",
         ],
     }

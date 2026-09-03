@@ -142,14 +142,18 @@ system policy + untrusted evidence + user question
    ↓
 Ollama / qwen2.5:7b
    ↓
-SSE: stage → sources → token → warning/error → done
+SSE: stage → sources → token
    ↓
-citation validation → answer + Evidence ledger
+citation_validation → citation_repair? → answer_replacement? → done
+   ↓
+final answer + strict citation metadata + Evidence ledger
 ```
 
 Nếu evidence không vượt ngưỡng phù hợp, hệ thống nên từ chối trả lời thay vì để model đoán. Mỗi
 nguồn có index ổn định như `[1]`, `[2]`; cùng index đó được dùng trong prompt, câu trả lời và
-Evidence ledger.
+Evidence ledger. Citation được kiểm tra theo từng câu factual: citation ở câu sau không bao phủ câu
+trước. Hệ thống chỉ thử sửa citation tối đa một lần và thay draft bằng final answer qua event
+`answer_replacement` khi cần.
 
 ## 5. Cấu trúc repository
 
@@ -304,7 +308,7 @@ Các route ổn định nằm dưới `/api/v1`; route không version được g
 | `GET /api/v1/search/bm25`     | Sparse retrieval.                                                |
 | `GET /api/v1/search/semantic` | Dense FAISS retrieval.                                           |
 | `POST /api/v1/ask`            | Grounded answer không streaming.                                 |
-| `POST /api/v1/ask/stream`     | SSE gồm `stage`, `sources`, `token`, `warning`, `error`, `done`. |
+| `POST /api/v1/ask/stream`     | SSE gồm `stage`, `sources`, `token`, `answer_replacement`, `warning`, `error`, `done`. |
 | `GET /health/live`            | Process liveness.                                                |
 | `GET /health/ready`           | Readiness của corpus, index và RAG dependency.                   |
 | `GET /stats`                  | Metadata của corpus, index và model.                             |
@@ -363,9 +367,11 @@ uv run python -m scripts.run_evaluation \
 make eval-rag
 ```
 
-Script đánh giá context precision/recall, answer relevance, citation coverage, refusal correctness,
-latency và error rate trên API đang chạy. Nó ghi lại generator model và không giả vờ sử dụng LLM
-judge. Semantic entailment-based faithfulness vẫn là hạng mục chưa hoàn tất.
+Script đánh giá context precision/recall, answer relevance, citation metrics, refusal correctness,
+latency và error rate trên API đang chạy. `citation_coverage` được giữ tương thích ngược và biểu thị
+tỷ lệ nguồn được dùng (cùng nghĩa với `source_utilization`); `claim_citation_coverage` biểu thị tỷ lệ
+câu factual có citation. Các metric này là kiểm tra cấu trúc, không phải semantic entailment. Script
+ghi lại generator model và không giả vờ sử dụng LLM judge.
 
 ## 11. Kiểm tra chất lượng
 

@@ -7,7 +7,7 @@ def stylesheet() -> str:
     """Return the complete, self-contained CSS for the modern research workspace."""
     return """
     <style>
-    @import url('https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700&family=JetBrains+Mono:ital,wght@0,400;0,500;0,600;1,400&display=swap');
+    @import url('https://fonts.googleapis.com/css2?family=JetBrains+Mono:ital,wght@0,400;0,500;0,600;1,400&family=Source+Sans+3:wght@400;500;600;700&display=swap');
 
     :root {
         --bg-main: #0b0f19;
@@ -32,7 +32,7 @@ def stylesheet() -> str:
         --warning: #f59e0b;
         --danger: #ef4444;
 
-        --font-sans: 'Inter', -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+        --font-sans: 'Source Sans 3', -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
         --font-mono: 'JetBrains Mono', Consolas, monospace;
     }
 
@@ -241,7 +241,7 @@ def stylesheet() -> str:
         background: rgba(15, 23, 42, 0.6);
         padding: 0.9rem 1.1rem;
         border-radius: 10px;
-        border-left: 3px solid var(--primary);
+        border: 1px solid rgba(99, 102, 241, 0.24);
     }
 
     /* Textarea & Inputs Focus Glow (PROMPT 3) */
@@ -430,6 +430,17 @@ def stylesheet() -> str:
         border-color: var(--danger);
         color: var(--danger);
         background: rgba(239, 68, 68, 0.1);
+    }
+
+    .pipeline-state.is-warning {
+        border-color: var(--warning);
+        color: var(--warning);
+        background: rgba(245, 158, 11, 0.1);
+    }
+
+    .status-dot.warning {
+        background: var(--warning);
+        box-shadow: 0 0 8px rgba(245, 158, 11, 0.2);
     }
 
     .question {

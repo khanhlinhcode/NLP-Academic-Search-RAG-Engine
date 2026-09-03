@@ -220,6 +220,8 @@ class TestEvaluateRAGCase:
         assert metrics["answer_relevance"] == 1.0
         assert metrics["citation_precision"] == 1.0
         assert metrics["citation_coverage"] == 1.0
+        assert metrics["source_utilization"] == 1.0
+        assert metrics["claim_citation_coverage"] == 1.0
         assert metrics["invalid_citation_rate"] == 0.0
         assert metrics["refusal_correct"] is True
         assert metrics["faithfulness_proxy"] == 1.0

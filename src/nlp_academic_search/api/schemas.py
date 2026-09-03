@@ -7,6 +7,7 @@ from typing import Literal
 from pydantic import BaseModel, Field
 
 from nlp_academic_search.rag.citations import CitationValidation
+from nlp_academic_search.rag.verification import SemanticValidation
 
 
 class AskRequest(BaseModel):
@@ -70,6 +71,7 @@ class StageLatencies(BaseModel):
     retrieval_ms: float
     generation_ms: float
     total_ms: float
+    verification_ms: float = 0.0
 
 
 class AnswerMetadata(BaseModel):
@@ -82,6 +84,20 @@ class AnswerMetadata(BaseModel):
     latencies: StageLatencies
     warnings: list[str]
     citation_validation: CitationValidation
+    citation_repair_attempted: bool = False
+    citation_repair_succeeded: bool | None = None
+    answer_status: Literal[
+        "verified",
+        "structurally_valid",
+        "refused_insufficient_context",
+        "refused_unverified",
+        "verification_unavailable",
+    ] = "structurally_valid"
+    semantic_validation: SemanticValidation | None = None
+    semantic_verification_attempted: bool = False
+    semantic_verification_succeeded: bool | None = None
+    final_answer_replaced: bool = False
+    verification_latency_ms: float = 0.0
 
 
 class AskResponse(BaseModel):
@@ -104,6 +120,7 @@ class HealthResponse(BaseModel):
     rag_enabled: bool
     ollama_available: bool
     generation_available: bool = False
+    semantic_verification_available: bool = False
     index_provenance: str | None
     models: dict[str, str]
     checks: dict[str, bool]

@@ -29,9 +29,6 @@ def configured_api_base_url() -> str:
     return (configured or "http://localhost:8000").rstrip("/")
 
 
-API_BASE_URL = configured_api_base_url()
-
-
 def configured_backend_token() -> str | None:
     configured = os.getenv("BACKEND_API_TOKEN")
     if not configured:
@@ -40,9 +37,6 @@ def configured_backend_token() -> str | None:
         except (KeyError, FileNotFoundError):
             configured = None
     return configured or None
-
-
-BACKEND_API_TOKEN = configured_backend_token()
 
 
 @st.cache_resource
@@ -137,7 +131,7 @@ def render_pipeline(health: dict | None) -> None:
           <li><span>02</span><div><strong>Retrieve candidates</strong><small>{safe(retrieval_name)} dense + sparse</small></div></li>
           <li><span>03</span><div><strong>Fuse rankings</strong><small>Reciprocal rank fusion</small></div></li>
           <li><span>04</span><div><strong>Refine evidence</strong><small>Optional Cross-Encoder</small></div></li>
-          <li><span>05</span><div><strong>Ground answer</strong><small>{safe(generation_name)} + citation validation</small></div></li>
+          <li><span>05</span><div><strong>Ground answer</strong><small>{safe(generation_name)} + evidence verification</small></div></li>
         </ol>
         """,
         unsafe_allow_html=True,
@@ -463,7 +457,41 @@ def render_saved_answer(entry: dict) -> None:
         '<div class="answer-label">Answer grounded in retrieved papers</div>',
         unsafe_allow_html=True,
     )
+    render_citation_verdict(entry.get("metadata", {}))
     st.markdown(entry.get("answer", ""))
+
+
+def render_citation_verdict(metadata: dict) -> None:
+    citation = metadata.get("citation_validation") or {}
+    if not citation:
+        return
+    status = metadata.get("answer_status")
+    semantic = metadata.get("semantic_validation") or {}
+    if status == "verified" and semantic.get("valid"):
+        label = "Evidence verified"
+        detail = "Claims have valid citations and exact supporting source quotes"
+        css_class = "is-complete"
+        dot_class = "ready"
+    elif status in {"refused_unverified", "refused_insufficient_context"}:
+        label = "Answer withheld"
+        detail = "Not enough verified evidence in the retrieved sources"
+        css_class = "is-warning"
+        dot_class = "warning"
+    elif citation.get("valid"):
+        label = "Citation format valid"
+        detail = "Semantic verification is unavailable or disabled"
+        css_class = "is-warning"
+        dot_class = "warning"
+    else:
+        label = "Needs citation review"
+        detail = "One or more factual sentences lack a valid source"
+        css_class = "is-warning"
+        dot_class = "warning"
+    st.markdown(
+        f'<div class="pipeline-state {css_class}"><span class="status-dot {dot_class}"></span>'
+        f"<strong>{label}</strong><span>{detail}</span></div>",
+        unsafe_allow_html=True,
+    )
 
 
 def render_ask(client: AcademicSearchClient, health: dict | None) -> None:
@@ -518,6 +546,7 @@ def render_ask(client: AcademicSearchClient, health: dict | None) -> None:
         metadata: dict = {}
         error_message: str | None = None
         warnings: list[str] = []
+        replacement_answer: str | None = None
         with evidence_col:
             with st.container(key="evidence_rail"):
                 evidence_slot = st.empty()
@@ -536,9 +565,10 @@ def render_ask(client: AcademicSearchClient, health: dict | None) -> None:
                 '<div class="answer-label">Answer grounded in retrieved papers</div>',
                 unsafe_allow_html=True,
             )
+            answer_slot = st.empty()
 
             def tokens():
-                nonlocal sources, metadata, error_message, warnings
+                nonlocal sources, metadata, error_message, warnings, replacement_answer
                 for event in client.stream_answer(
                     question.strip(), top_k=top_k, use_reranker=use_reranker
                 ):
@@ -552,11 +582,24 @@ def render_ask(client: AcademicSearchClient, health: dict | None) -> None:
                             render_sources(sources, metadata)
                     elif event_type == "token":
                         yield data.get("token", "")
+                    elif event_type == "answer_replacement":
+                        replacement_answer = str(data.get("answer", "")).strip() or None
                     elif event_type == "stage":
-                        name = safe(str(data.get("name", "working")).capitalize())
-                        status = safe(str(data.get("status", "running")).capitalize())
+                        raw_name = str(data.get("name", "working")).replace("_", " ")
+                        raw_status = str(data.get("status", "running")).replace("_", " ")
+                        name = safe(raw_name.title())
+                        status = safe(raw_status.title())
+                        state_class = (
+                            "is-complete"
+                            if raw_status == "complete"
+                            else "is-warning"
+                            if raw_status in {"needs repair", "needs review"}
+                            else ""
+                        )
+                        dot_class = "warning" if state_class == "is-warning" else "ready"
                         stage_slot.markdown(
-                            f'<div class="pipeline-state"><span class="status-dot ready"></span>'
+                            f'<div class="pipeline-state {state_class}">'
+                            f'<span class="status-dot {dot_class}"></span>'
                             f"<strong>{name}</strong><span>{status}</span></div>",
                             unsafe_allow_html=True,
                         )
@@ -568,7 +611,11 @@ def render_ask(client: AcademicSearchClient, health: dict | None) -> None:
                         error_message = data.get("message", "Generation failed.")
 
             try:
-                answer = st.write_stream(tokens()) or ""
+                with answer_slot.container():
+                    answer = st.write_stream(tokens()) or ""
+                if replacement_answer is not None:
+                    answer = replacement_answer
+                    answer_slot.markdown(answer)
                 if error_message:
                     stage_slot.markdown(
                         '<div class="pipeline-state is-error"><span class="status-dot offline"></span>'
@@ -577,11 +624,30 @@ def render_ask(client: AcademicSearchClient, health: dict | None) -> None:
                     )
                     st.error(error_message, icon=None)
                 else:
-                    stage_slot.markdown(
-                        '<div class="pipeline-state is-complete"><span class="status-dot ready"></span>'
-                        "<strong>Answer ready</strong><span>Generation complete</span></div>",
-                        unsafe_allow_html=True,
-                    )
+                    citation = metadata.get("citation_validation") or {}
+                    status = metadata.get("answer_status")
+                    if status == "verified":
+                        stage_slot.markdown(
+                            '<div class="pipeline-state is-complete">'
+                            '<span class="status-dot ready"></span>'
+                            "<strong>Answer ready</strong><span>Evidence verified</span></div>",
+                            unsafe_allow_html=True,
+                        )
+                    elif status in {"refused_unverified", "refused_insufficient_context"}:
+                        stage_slot.markdown(
+                            '<div class="pipeline-state is-warning">'
+                            '<span class="status-dot warning"></span>'
+                            "<strong>Answer withheld</strong><span>Evidence could not be verified</span></div>",
+                            unsafe_allow_html=True,
+                        )
+                    else:
+                        stage_slot.markdown(
+                            '<div class="pipeline-state is-warning">'
+                            '<span class="status-dot warning"></span>'
+                            "<strong>Verification pending</strong>"
+                            "<span>Citation format is not semantic evidence verification</span></div>",
+                            unsafe_allow_html=True,
+                        )
                     history.append(
                         {
                             "question": question.strip(),
@@ -639,11 +705,13 @@ def render_ask(client: AcademicSearchClient, health: dict | None) -> None:
 
 
 def main() -> None:
-    client = get_client(API_BASE_URL, BACKEND_API_TOKEN)
+    api_base_url = configured_api_base_url()
+    backend_api_token = configured_backend_token()
+    client = get_client(api_base_url, backend_api_token)
     health = None
     health_error = None
     try:
-        health = get_health(API_BASE_URL, BACKEND_API_TOKEN)
+        health = get_health(api_base_url, backend_api_token)
     except APIError as exc:
         health_error = str(exc)
 

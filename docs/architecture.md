@@ -43,7 +43,10 @@ silent retrieval corruption.
 
 Search requests use BM25 and normalized Sentence-BERT/FAISS retrieval, then combine ranks with RRF.
 Cross-Encoder reranking is optional. Ask requests reuse retrieval, budget the selected abstracts as
-untrusted context, stream Ollama output over SSE and validate citation indices before completion.
+untrusted context, stream provider output over SSE, and validate every factual sentence before
+completion. An invalid draft receives at most one citation-repair pass. If repair changes the draft,
+the stream emits `answer_replacement`; the final `done` event always carries final validation
+metadata.
 
 ## Runtime boundaries
 
