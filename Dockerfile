@@ -15,7 +15,7 @@ ENV PYTHONDONTWRITEBYTECODE=1 \
 
 RUN groupadd --system app && useradd --system --gid app --create-home app
 COPY --from=builder /build/dist /tmp/dist
-RUN python -m pip install /tmp/dist/*.whl[ui] && rm -rf /tmp/dist
+RUN set -e; WHEEL=$(ls /tmp/dist/*.whl) && python -m pip install "${WHEEL}[ui]" && rm -rf /tmp/dist
 COPY scripts ./scripts
 RUN mkdir -p /app/data && chown -R app:app /app
 
