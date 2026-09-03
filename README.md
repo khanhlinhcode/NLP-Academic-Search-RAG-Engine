@@ -1,249 +1,435 @@
-# 🔬 NLP Academic Search & RAG Engine
+# NLP Academic Search & RAG Engine
 
-[![Python](https://img.shields.io/badge/Python-3.9+-blue?logo=python&logoColor=white)](https://python.org)
-[![PyTorch](https://img.shields.io/badge/PyTorch-2.0+-ee4c2c?logo=pytorch&logoColor=white)](https://pytorch.org)
-[![FastAPI](https://img.shields.io/badge/FastAPI-0.100+-009688?logo=fastapi&logoColor=white)](https://fastapi.tiangolo.com)
-[![FAISS](https://img.shields.io/badge/FAISS-Vector_DB-blue)](https://github.com/facebookresearch/faiss)
-[![Hugging Face](https://img.shields.io/badge/🤗_Hugging_Face-Transformers-yellow)](https://huggingface.co)
-[![Ollama](https://img.shields.io/badge/Ollama-Qwen2.5:7B-black)](https://ollama.com)
-[![License](https://img.shields.io/badge/License-MIT-green)](LICENSE)
+**Retrieve · Read · Reason**
 
-> A production-ready **semantic search system** for scientific papers with **LLM-powered question answering** (RAG). Combines **BM25 keyword search**, **SBERT embeddings**, **FAISS vector search**, **Cross-Encoder reranking**, and **Ollama LLM (Qwen2.5-7B)** to deliver accurate, citation-backed answers with 100% recall retrieval.
+Hệ thống local-first để tìm kiếm bài báo khoa học và hỏi đáp có dẫn nguồn. Pipeline kết hợp BM25,
+Sentence-Transformers, FAISS, Reciprocal Rank Fusion (RRF), Cross-Encoder tùy chọn, FastAPI,
+Streamlit và Ollama.
 
----
+> **Trạng thái:** hardened local MVP. Dự án đã có cấu hình typed, corpus/index manifest, timeout,
+> giới hạn concurrency, lỗi có cấu trúc, kiểm tra citation, test tự động, CI và container. Dự án
+> chưa được tuyên bố production-ready vì chưa hoàn tất benchmark chuẩn SciFact/BEIR, đánh giá
+> faithfulness theo semantic entailment và kiểm thử tải/bảo mật ở quy mô production.
 
-## 🏗️ System Architecture
+## Mục lục
 
-```
-                       User Query / Question
-                                │
-                                ▼
-                   ┌─────────────────────────┐
-                   │ Query Preprocessor      │
-                   └────────────┬────────────┘
-                                │
-               ┌────────────────┴────────────────┐
-               ▼                                 ▼
-    ┌────────────────────┐            ┌────────────────────┐
-    │ BM25 Sparse Search │            │ SBERT Dense Search │
-    │ (Keyword Match)    │            │ (FAISS Vector Index)│
-    └──────────┬─────────┘            └──────────┬─────────┘
-               │                                 │
-               └────────────────┬────────────────┘
-                                │
-                                ▼
-                   ┌─────────────────────────┐
-                   │ Hybrid Fusion (RRF)     │
-                   └────────────┬────────────┘
-                                │
-                                ▼
-                   ┌─────────────────────────┐
-                   │ Cross-Encoder Reranker  │
-                   └────────────┬────────────┘
-                                │
-                                ▼
-                   ┌─────────────────────────┐
-                   │ Context Prompt Builder  │
-                   └────────────┬────────────┘
-                                │
-                                ▼
-                   ┌─────────────────────────┐
-                   │ Ollama LLM (Qwen2.5-7B) │
-                   └────────────┬────────────┘
-                                │
-                                ▼
-                   Response + Source Citations
-```
+- [1. Mục tiêu và phạm vi](#1-mục-tiêu-và-phạm-vi)
+- [2. Những gì có thể tin cậy](#2-những-gì-có-thể-tin-cậy)
+- [3. Kiến trúc hệ thống](#3-kiến-trúc-hệ-thống)
+- [4. Phương pháp truy xuất và RAG](#4-phương-pháp-truy-xuất-và-rag)
+- [5. Cấu trúc repository](#5-cấu-trúc-repository)
+- [6. Cài đặt và chạy nhanh](#6-cài-đặt-và-chạy-nhanh)
+- [7. Cách sử dụng](#7-cách-sử-dụng)
+- [8. Dữ liệu, index và khả năng tái lập](#8-dữ-liệu-index-và-khả-năng-tái-lập)
+- [9. API](#9-api)
+- [10. Đánh giá](#10-đánh-giá)
+- [11. Kiểm tra chất lượng](#11-kiểm-tra-chất-lượng)
+- [12. Docker](#12-docker)
+- [13. Cấu hình và bảo mật](#13-cấu-hình-và-bảo-mật)
+- [14. Giới hạn hiện tại](#14-giới-hạn-hiện-tại)
+- [15. Tài liệu liên quan](#15-tài-liệu-liên-quan)
 
----
+## 1. Mục tiêu và phạm vi
 
-## 📊 Benchmark & Evaluation Results
+Dự án giải quyết hai tác vụ riêng biệt nhưng dùng chung một nền tảng dữ liệu:
 
-Evaluated on **15,000 arXiv scientific papers** using standard Information Retrieval (IR) metrics:
+| Tác vụ | Mục tiêu | Đầu ra |
+|---|---|---|
+| **Search** | Tìm và xếp hạng papers phù hợp với một chủ đề. | Danh sách papers, metadata, score và liên kết nguồn. |
+| **Ask/RAG** | Tổng hợp câu trả lời chỉ từ evidence đã truy xuất. | Câu trả lời streaming, citation và Evidence ledger. |
 
-| Search Method | Precision@10 | Recall@10 | MRR@10 | nDCG@10 | Latency (ms) |
-|---|:---:|:---:|:---:|:---:|:---:|
-| **BM25** (Sparse Retrieval) | 0.0950 | 0.9500 | 0.9500 | 0.9500 | 61.18 ms |
-| **SBERT** (Dense Retrieval) | 0.0900 | 0.9000 | 0.9000 | 0.9000 | 60.82 ms |
-| 🏆 **Hybrid Search (RRF)** | **0.1000** | **1.0000 (100%)** | **0.9600** | **0.9693** | **84.52 ms** |
-| **Hybrid + Cross-Encoder Reranker** | 0.0950 | 0.9500 | 0.9500 | 0.9500 | 2508.41 ms |
+Thiết kế local-first giữ corpus, embeddings và LLM trên máy người dùng. FastAPI là lớp dịch vụ
+trung tâm; Streamlit chỉ giao tiếp với API và không trực tiếp tải index hoặc gọi model.
 
-> 📌 **Key Technical Insight**: **Hybrid Search (BM25 + SBERT with Reciprocal Rank Fusion)** achieves **100% Recall@10** and **0.9693 nDCG@10** at ultra-fast latency (~84.5ms), providing optimal candidates for RAG generation.
+## 2. Những gì có thể tin cậy
 
----
+- Ingestion mới dùng endpoint metadata arXiv OAI-PMH chính thức và giữ lại arXiv ID, tác giả,
+  category, ngày, URL, DOI và license khi nguồn cung cấp.
+- Các bản ghi cũ có ID dạng `paper_XXXXX` được gắn nguồn
+  `legacy-ccdv-arxiv-summarization`. Hệ thống không tự tạo metadata hoặc URL arXiv giả.
+- Semantic index phải có `index_manifest.json` ràng buộc corpus hash, thứ tự document ID, số lượng
+  và chiều vector, embedding model/revision, chuẩn hóa, loại FAISS và phiên bản thư viện.
+- Nội dung paper được coi là **untrusted evidence**, không phải instruction cho LLM.
+- Citation validator kiểm tra index nguồn và độ phủ citation một cách xác định. Đây là kiểm tra cấu
+  trúc, chưa phải xác minh đầy đủ rằng mọi mệnh đề được nguồn hỗ trợ về mặt ngữ nghĩa.
+- Cross-Encoder mặc định tắt cho đến khi một validation set độc lập chứng minh nó cải thiện chất
+  lượng đủ để bù chi phí latency.
 
-## 📁 Detailed Project Structure
+Corpus runtime nằm trong `data/`, không được commit vào Git. Vì vậy số papers thực tế có thể là
+corpus legacy 15.000 bản ghi hoặc một corpus arXiv mới với metadata đã xác minh.
 
-```
-NLP Academic Search & RAG Engine/
-├── data/                         # Data directory (Git ignored)
-│   ├── raw/                      # Downloaded arXiv JSONL dataset (15,000 papers)
-│   ├── embeddings/               # FAISS vector index & pre-computed embeddings
-│   └── processed/                # Evaluation benchmark results
-├── src/                          # Core source code
-│   ├── __init__.py
-│   ├── config.py                 # Centralized configuration dataclass & env vars
-│   ├── data/
-│   │   ├── __init__.py
-│   │   ├── loader.py             # Paper dataclass & JSONL dataset loader
-│   │   └── preprocessor.py       # Text cleaning, LaTeX removal & BM25 tokenizer
-│   ├── search/
-│   │   ├── __init__.py
-│   │   ├── bm25_search.py        # BM25Okapi sparse keyword retrieval engine
-│   │   ├── semantic_search.py    # Sentence-BERT + FAISS dense retrieval engine
-│   │   ├── hybrid_search.py      # Reciprocal Rank Fusion (RRF) & Weighted linear fusion
-│   │   └── reranker.py           # Cross-Encoder (ms-marco-MiniLM) reranking model
-│   ├── rag/
-│   │   ├── __init__.py
-│   │   ├── prompt_builder.py     # Context prompt construction with citation grounding
-│   │   └── generator.py          # Ollama client integration (Sync & Streaming SSE)
-│   ├── api/
-│   │   ├── __init__.py
-│   │   ├── main.py               # FastAPI application & lifespan state management
-│   │   ├── schemas.py            # Pydantic request/response schemas
-│   │   └── routes/
-│   │       ├── __init__.py
-│   │       ├── search.py         # /search, /search/bm25, /search/semantic endpoints
-│   │       └── rag.py            # /ask, /ask/stream endpoints
-│   └── evaluation/
-│       ├── __init__.py
-│       └── metrics.py            # Precision@K, Recall@K, MRR, nDCG implementation
-├── scripts/                      # Execution scripts
-│   ├── __init__.py
-│   ├── download_data.py          # Download arXiv dataset from Hugging Face
-│   ├── build_index.py            # Compute SBERT embeddings & build FAISS index
-│   └── run_evaluation.py         # Run IR benchmarking suite across all methods
-├── tests/                        # Unit tests
-│   ├── __init__.py
-│   ├── test_bm25.py              # BM25 engine unit tests
-│   └── test_metrics.py           # IR evaluation metrics unit tests
-├── .vscode/                      # IDE workspace configuration
-│   └── settings.json
-├── .env.example                  # Environment variables template
-├── .gitignore                    # Standard Python gitignore
-├── Dockerfile                    # Multi-stage production container setup
-├── docker-compose.yml            # FastAPI + Ollama orchestration
-├── Makefile                      # Command shortcuts for quick execution
-├── pyproject.toml                # Project metadata & pytest configuration
-├── pyrightconfig.json            # Linter & type checker path resolution
-├── requirements.txt              # Frozen Python dependencies
-└── README.md                     # Project documentation
+## 3. Kiến trúc hệ thống
+
+### 3.1 Sơ đồ tổng thể
+
+```text
+                         OFFLINE / BUILD-TIME
+
+arXiv OAI-PMH
+      │
+      ▼
+validate ── deduplicate ── quarantine
+      │
+      ▼
+versioned corpus + corpus_manifest.json
+      │
+      ├── BM25 corpus
+      └── Sentence-BERT ── FAISS index + index_manifest.json
+
+                         ONLINE / REQUEST-TIME
+
+Browser ──► Streamlit UI ──HTTP/SSE──► FastAPI
+                                         │
+                         ┌───────────────┴────────────────┐
+                         ▼                                ▼
+                  Retrieval service                 RAG service
+            BM25 + FAISS → RRF → rerank?      retrieve → context → Ollama
+                         │                                │
+                         ▼                                ▼
+                 ranked papers                  answer + citations
 ```
 
----
+### 3.2 Trách nhiệm của từng lớp
 
-## ⚡ Quick Start Guide
+| Lớp | Trách nhiệm |
+|---|---|
+| `data` | Mô hình `Paper`, ingestion adapter, làm sạch, validation và manifest. |
+| `search` | BM25, embedding/FAISS, fusion, filter và reranking. |
+| `rag` | Xây context/prompt, gọi Ollama, streaming và kiểm tra citation. |
+| `evaluation` | Metrics retrieval và RAG có thể chạy lặp lại. |
+| `api` | Contract HTTP, dependency lifecycle, timeout, concurrency và lỗi có cấu trúc. |
+| `ui` | Trình bày Search/Ask, trạng thái hệ thống và Evidence ledger. |
+| `scripts` | Entry point cho ingestion, indexing, audit và evaluation; không chứa business logic lõi. |
 
-### Prerequisites
-- Python 3.9+
-- [Ollama](https://ollama.com) installed and running
+Hướng phụ thuộc chính là `UI → API → domain services → data/config`. Các module retrieval và RAG
+không phụ thuộc giao diện, nhờ đó có thể kiểm thử độc lập và tái sử dụng qua API hoặc CLI.
 
-### 1. Setup Environment
+## 4. Phương pháp truy xuất và RAG
+
+### 4.1 Luồng Search
+
+```text
+query
+  ├── Unicode-safe tokenize ──► BM25 ─────────────┐
+  └── Sentence-BERT ──► normalized vector ─► FAISS├──► RRF ─► reranker? ─► top-k
+                                                   ┘
+```
+
+- **BM25** ưu tiên từ khóa chính xác, tên phương pháp, từ viết tắt và thuật ngữ hiếm.
+- **Dense retrieval** tìm papers diễn đạt cùng ý bằng từ khác thông qua cosine-equivalent inner
+  product trên vector đã chuẩn hóa.
+- **RRF** hợp nhất thứ hạng thay vì cộng trực tiếp hai score khác thang đo:
+
+```text
+RRF(d) = Σ 1 / (k + rank_i(d))
+```
+
+- **Cross-Encoder** có thể chấm lại một candidate pool nhỏ nhưng tăng latency đáng kể.
+
+`rrf_score` là tín hiệu **xếp hạng**, không phải xác suất paper đúng hay phần trăm liên quan.
+
+### 4.2 Luồng Ask/RAG
+
+```text
+question
+   ↓
+hybrid retrieval → top-k evidence → relevance gate
+   ↓
+context budget: title + metadata + abstract + stable source index
+   ↓
+system policy + untrusted evidence + user question
+   ↓
+Ollama / qwen2.5:7b
+   ↓
+SSE: stage → sources → token → warning/error → done
+   ↓
+citation validation → answer + Evidence ledger
+```
+
+Nếu evidence không vượt ngưỡng phù hợp, hệ thống nên từ chối trả lời thay vì để model đoán. Mỗi
+nguồn có index ổn định như `[1]`, `[2]`; cùng index đó được dùng trong prompt, câu trả lời và
+Evidence ledger.
+
+## 5. Cấu trúc repository
+
+Dự án dùng **Python src layout**: tên package là `nlp_academic_search`, còn `src/` chỉ là thư mục
+chứa source code. Cách này ngăn test vô tình import code từ working directory thay vì package đã
+được cài.
+
+```text
+.
+├── src/
+│   └── nlp_academic_search/
+│       ├── api/                  # FastAPI app, routes, schemas, service container
+│       ├── data/                 # Paper model, preprocessing, manifests, source adapters
+│       │   └── sources/          # arXiv OAI-PMH và interface nguồn dữ liệu
+│       ├── evaluation/           # Retrieval/RAG metrics
+│       ├── rag/                  # Prompt, generator, streaming, citations
+│       ├── search/               # BM25, FAISS, fusion, filters, reranker
+│       ├── ui/                   # Streamlit client, views, styles, assets
+│       └── config.py             # Typed settings từ environment
+├── scripts/                      # CLI/operational entry points
+├── tests/
+│   ├── unit/                     # Deterministic tests, không cần service/model thật
+│   └── integration/              # Local service và end-to-end tests có marker
+├── benchmarks/
+│   ├── retrieval/                # Golden retrieval queries, documents và qrels
+│   └── rag/                      # Golden RAG questions và expected evidence
+├── data/                         # Corpus/index runtime; không commit
+├── docs/
+│   ├── architecture.md           # Ranh giới module và dependency rules
+│   ├── product.md                # Phạm vi và nguyên tắc sản phẩm
+│   └── design.md                 # Design system của UI
+├── .github/workflows/ci.yml      # Quality gate trên CI
+├── CONTRIBUTING.md               # Quy trình phát triển và kiểm tra thay đổi
+├── pyproject.toml                # Package metadata, dependencies và tool configuration
+├── uv.lock                       # Dependency lock để tái lập môi trường
+├── Makefile                      # Giao diện lệnh thống nhất
+├── Dockerfile
+└── docker-compose.yml
+```
+
+## 6. Cài đặt và chạy nhanh
+
+### 6.1 Yêu cầu
+
+- Python 3.11
+- [uv](https://docs.astral.sh/uv/)
+- [Ollama](https://ollama.com/) nếu sử dụng Ask/RAG
+
+### 6.2 Chuẩn bị môi trường và dữ liệu
+
 ```bash
-# Clone the repository
-git clone https://github.com/YOUR_USERNAME/nlp-academic-search-rag.git
-cd "NLP Academic Search & RAG Engine"
-
-# Create virtual environment & install dependencies in editable mode
+cp .env.example .env
 make setup
-source venv/bin/activate
-```
 
-### 2. Download Dataset
-```bash
-# Download 15,000 arXiv paper summaries from HuggingFace
-make download
-```
-
-### 3. Build Vector Index
-```bash
-# Generate SBERT embeddings & build FAISS index
+# Lần chạy thử đầu tiên nên dùng corpus nhỏ.
+ARXIV_MAX_RECORDS=1000 make download
 make index
-```
 
-### 4. Start Ollama Service & Pull Model
-```bash
-# Start Ollama
-brew services start ollama
-
-# Pull Qwen2.5-7B model
+# Chỉ cần pull một lần. Nếu `ollama list` hoạt động thì Ollama server đã chạy.
 ollama pull qwen2.5:7b
 ```
 
-### 5. Launch FastAPI Server
+Muốn ingest mặc định 15.000 records:
+
+```bash
+make download
+make index
+```
+
+### 6.3 Khởi động ứng dụng
+
+Terminal 1:
+
 ```bash
 make api
-# App running at: http://localhost:8000
-# Interactive Swagger UI Docs: http://localhost:8000/docs
 ```
 
----
-
-## 📡 REST API Documentation
-
-| Endpoint | Method | Description |
-|---|:---:|---|
-| `/search` | `GET` | **Hybrid Search** (BM25 + SBERT + RRF) |
-| `/search/bm25` | `GET` | Sparse Keyword Search only |
-| `/search/semantic` | `GET` | Dense Vector Similarity Search only |
-| `/ask` | `POST` | **RAG Query** — Answer generation with citation sources |
-| `/ask/stream` | `POST` | **Streaming RAG Query** — Server-Sent Events (SSE) stream |
-| `/health` | `GET` | Server health check & status |
-| `/stats` | `GET` | System statistics (total papers, models used) |
-| `/docs` | `GET` | OpenAPI / Swagger UI |
-
-### Example: Search Query
-```bash
-curl -s "http://localhost:8000/search?q=transformer+attention+mechanism&top_k=3"
-```
-
-### Example: RAG Question Answering
-```bash
-curl -s -X POST "http://localhost:8000/ask" \
-  -H "Content-Type: application/json" \
-  -d '{"question": "What are the main methods for text classification using deep learning?", "top_k": 5}'
-```
-
----
-
-## 🧪 Running Unit Tests & Benchmarks
+Terminal 2:
 
 ```bash
-# Run unit tests (21/21 passed)
-make test
-
-# Run full evaluation benchmark suite
-make eval
+make ui
 ```
 
----
+- Swagger/OpenAPI: <http://localhost:8000/docs>
+- Streamlit UI: <http://localhost:8501>
 
-## 🐳 Docker Deployment
+Không chạy thêm `ollama serve` nếu lệnh đó báo `address already in use` và `ollama list` vẫn trả
+về danh sách model; điều đó có nghĩa service đã hoạt động trên cổng `11434`.
+
+## 7. Cách sử dụng
+
+### Search
+
+Nhập một chủ đề hoặc mô tả nhu cầu thông tin, ví dụ:
+
+```text
+information retrieval evaluation using precision and recall
+```
+
+Chọn `Hybrid · RRF` làm mặc định. Dùng BM25 khi cần khớp thuật ngữ chính xác và Semantic khi câu
+query mang tính diễn giải. Metadata filter nên được dùng sau khi đã kiểm tra corpus có category,
+năm và tác giả đáng tin cậy.
+
+### Ask
+
+Đặt một câu hỏi cần tổng hợp evidence, ví dụ:
+
+```text
+Why do the authors propose novelty-based evaluation in addition to precision and recall?
+```
+
+Một câu trả lời ngắn nhưng bám sát abstract và dẫn đúng nguồn tốt hơn một câu trả lời dài chứa kiến
+thức ngoài corpus. Evidence ledger cho biết nguồn nào đã truy xuất và nguồn nào thực sự được trích
+dẫn.
+
+## 8. Dữ liệu, index và khả năng tái lập
+
+### 8.1 Versioning và atomic activation
+
+Mỗi lần ingestion hoặc build index tạo một version mới. Version đang phục vụ không bị ghi đè. Chỉ
+sau khi output mới vượt validation, con trỏ `CURRENT` mới được cập nhật atomically.
+
+Khi API khởi động, index manifest được đối chiếu với:
+
+- SHA-256 của corpus;
+- hash thứ tự document ID;
+- số lượng và chiều vector;
+- embedding model và revision;
+- normalization và FAISS metric/type.
+
+Mismatch làm startup fail rõ ràng, tránh trả kết quả sai âm thầm.
+
+### 8.2 Corpus legacy
+
+Không coi `data/raw/papers.jsonl` từ workflow Hugging Face cũ là metadata thư mục học thuật đã xác
+minh. Có thể tạo compatibility manifest cho index cũ bằng:
 
 ```bash
-# Start container stack
-docker-compose up -d
-
-# Pull LLM inside Ollama container
-docker exec nlp-search-ollama ollama pull qwen2.5:7b
+uv run python -m scripts.build_index --adopt-existing
 ```
 
----
+Manifest này chỉ xác minh shape, order và hash; nó không khẳng định provenance của model weights
+lịch sử. Để có provenance đầy đủ, hãy ingest lại arXiv và chạy `make index`.
 
-## 🛠️ Technology Stack
+## 9. API
 
-- **Core Engine**: Python 3.9+, PyTorch, Sentence-Transformers (`all-MiniLM-L6-v2`)
-- **Vector Database**: FAISS (Facebook AI Similarity Search)
-- **Sparse Retrieval**: BM25Okapi (`rank-bm25`)
-- **Reranker**: Cross-Encoder (`cross-encoder/ms-marco-MiniLM-L-6-v2`)
-- **LLM Engine**: Ollama (Qwen2.5-7B)
-- **Web API**: FastAPI, Uvicorn, Pydantic v2
-- **Testing & Benchmark**: Pytest, NumPy, Scikit-learn
-- **DevOps**: Docker, Docker Compose, Makefile
+Các route ổn định nằm dưới `/api/v1`; route không version được giữ làm alias tương thích ngược.
 
----
+| Route | Chức năng |
+|---|---|
+| `GET /api/v1/search` | Hybrid RRF/weighted search, filter và pagination. |
+| `GET /api/v1/search/bm25` | Sparse retrieval. |
+| `GET /api/v1/search/semantic` | Dense FAISS retrieval. |
+| `POST /api/v1/ask` | Grounded answer không streaming. |
+| `POST /api/v1/ask/stream` | SSE gồm `stage`, `sources`, `token`, `warning`, `error`, `done`. |
+| `GET /health/live` | Process liveness. |
+| `GET /health/ready` | Readiness của corpus, index và RAG dependency. |
+| `GET /stats` | Metadata của corpus, index và model. |
 
-## 📄 License
+Ví dụ:
 
-MIT License — see [LICENSE](LICENSE) for details.
-# NLP-Academic-Search-RAG-Engine
+```bash
+curl 'http://localhost:8000/api/v1/search?q=hybrid+retrieval&top_k=10&category=cs.CL'
+
+curl -X POST 'http://localhost:8000/api/v1/ask' \
+  -H 'Content-Type: application/json' \
+  -d '{"question":"How does retrieval-augmented generation use evidence?","top_k":5,"use_reranker":false}'
+```
+
+## 10. Đánh giá
+
+### 10.1 Nguyên tắc
+
+- Tách query, corpus và qrels; không tạo query bằng cách chép nguyên văn relevant document.
+- Không tune hyperparameter trên test split.
+- Báo cáo cả effectiveness và latency.
+- Ghi rõ corpus version, model/revision, `k`, seed và cấu hình retrieval.
+- Không suy rộng kết luận từ fixture nhỏ sang chất lượng production.
+
+Benchmark 20 query trước đây đã bị loại vì mỗi query được chép từ document liên quan và chỉ có một
+relevant item. Các số 100% Recall@10 và 0.9693 nDCG@10 không còn được dùng làm quality claim.
+
+### 10.2 Retrieval evaluation
+
+```bash
+make eval-retrieval
+```
+
+Fixture `benchmarks/retrieval/in_domain_golden.json` kiểm tra pipeline và metrics. Lần chạy ghi nhận ngày
+2026-09-03 chỉ có 3 queries và 3 documents:
+
+| Method | Recall@3 | MRR@3 | MAP@3 | nDCG@3 | p50 latency |
+|---|---:|---:|---:|---:|---:|
+| BM25 | 0.6667 | 1.0000 | 0.6667 | 0.8842 | 0.05 ms |
+| Dense | 1.0000 | 1.0000 | 0.8889 | 0.9760 | 5.91 ms |
+| RRF | 1.0000 | 1.0000 | 0.8889 | 0.9760 | 5.43 ms |
+
+Kết quả này xác nhận hành vi của code, không phải benchmark đủ mạnh. Có thể import BEIR/SciFact mà
+không sửa judgments:
+
+```bash
+uv run python -m scripts.import_beir path/to/scifact path/to/scifact/qrels/test.tsv \
+  data/benchmarks/scifact-test.json --name scifact
+uv run python -m scripts.run_evaluation \
+  --benchmark data/benchmarks/scifact-test.json -k 10
+```
+
+### 10.3 RAG evaluation
+
+```bash
+make eval-rag
+```
+
+Script đánh giá context precision/recall, answer relevance, citation coverage, refusal correctness,
+latency và error rate trên API đang chạy. Nó ghi lại generator model và không giả vờ sử dụng LLM
+judge. Semantic entailment-based faithfulness vẫn là hạng mục chưa hoàn tất.
+
+## 11. Kiểm tra chất lượng
+
+```bash
+make test            # unit tests, không cần network hoặc model thật
+make coverage        # coverage gate 70%
+make lint
+make format-check
+make typecheck
+make package
+make check           # chạy quality gate cục bộ
+uv run pytest -m integration
+```
+
+CI chạy lint, format, type checking, unit coverage, package build, Compose validation và kiểm tra
+secret/generated data không bị commit.
+
+## 12. Docker
+
+Image dùng multi-stage Python 3.11 build và chạy bằng non-root user. Corpus/index và model cache
+được mount thay vì đóng vào image.
+
+```bash
+docker compose config --quiet
+docker compose up --build
+
+# Smoke test đầy đủ, tốn nhiều tài nguyên hơn:
+make docker-smoke
+```
+
+Qwen2.5 7B cần vài GB lưu trữ và khoảng 8 GB RAM khả dụng trở lên. GPU acceleration phụ thuộc môi
+trường và không được bật trong Compose portable mặc định.
+
+## 13. Cấu hình và bảo mật
+
+Mọi biến môi trường và ràng buộc được mô tả trong `.env.example`. Khi triển khai ngoài máy cá nhân:
+
+- đặt `ENVIRONMENT=production`;
+- dùng allowlist cụ thể cho `CORS_ORIGINS`; wildcard bị từ chối;
+- không expose Ollama trực tiếp ra mạng không tin cậy;
+- đặt authentication/rate limiting ở reverse proxy đáng tin cậy;
+- giữ `EMBEDDING_DEVICE=cpu` và `EMBEDDING_NATIVE_THREADS=1` làm mặc định ổn định;
+- pin `EMBEDDING_MODEL_REVISION` trước khi build release index;
+- không commit `.env`, corpus, embeddings, model weights hoặc evaluation reports cục bộ.
+
+Ứng dụng có bounded workers, generation concurrency limit, deadline, request ID, structured logs và
+sanitized errors. Ứng dụng chưa có multi-tenant authorization hoặc distributed job queue.
+
+## 14. Giới hạn hiện tại
+
+- Corpus legacy 15.000 dòng không có metadata tác giả/category/ngày/arXiv đã xác minh.
+- Adopted FAISS manifest không chứng minh được historical model-weight provenance.
+- Citation validation chưa phải full semantic entailment.
+- Chất lượng Ask phụ thuộc trực tiếp vào độ phủ và độ mới của corpus.
+- UI là research workspace cục bộ, chưa phải hệ thống hội thoại đa người dùng có persistent memory.
+- SciFact/BEIR, reranker calibration, load test và security test production vẫn chưa hoàn tất.
+
+## 15. Tài liệu liên quan
+
+- [Architecture](docs/architecture.md): ranh giới module và quy tắc dependency.
+- [Product](docs/product.md): mục tiêu, người dùng và nguyên tắc sản phẩm.
+- [Design](docs/design.md): hệ thống thiết kế và hành vi giao diện.
+- [Data Card](docs/cards/data-card.md): nguồn dữ liệu, quy trình thu thập, schema và giới hạn.
+- [Model Card](docs/cards/model-card.md): mô hình embedding, reranker, generator và latency.
+- [Threat Model & Security](docs/security/threat-model.md): phân tích mối đe dọa và kiểm thử an toàn.
+- [Experiment Configurations](configs/experiments/): cấu hình thử nghiệm có thể tái lập (TOML).
+- [Contributing](CONTRIBUTING.md): cách thiết lập môi trường và quality gate cho thay đổi mới.
+- [LICENSE](LICENSE): giấy phép MIT.

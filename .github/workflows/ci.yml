@@ -1,0 +1,34 @@
+name: quality
+
+on:
+  push:
+  pull_request:
+
+permissions:
+  contents: read
+
+jobs:
+  python:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: astral-sh/setup-uv@v6
+        with:
+          enable-cache: true
+      - name: Install Python 3.11 and locked dependencies
+        run: uv sync --frozen --all-extras --python 3.11
+      - name: Lint
+        run: uv run ruff check .
+      - name: Format check
+        run: uv run ruff format --check .
+      - name: Type check
+        run: uv run pyright
+      - name: Unit tests and coverage
+        run: uv run pytest -m "not integration" --cov=nlp_academic_search --cov-report=term-missing
+      - name: Build package
+        run: uv run python -m build
+      - name: Validate Compose
+        run: docker compose config --quiet
+      - name: Check tracked secrets and generated data
+        run: |
+          test -z "$(git ls-files '.env' 'data/raw/**' 'data/embeddings/**' '*.safetensors')"

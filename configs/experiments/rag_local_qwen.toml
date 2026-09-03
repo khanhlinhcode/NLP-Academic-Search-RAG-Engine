@@ -1,0 +1,11 @@
+[experiment]
+name = "rag_local_qwen"
+dataset = "rag_golden"
+split = "test"
+generator_model = "qwen2.5:7b"
+prompt_version = "academic-grounding-v2"
+top_k = 5
+random_seed = 42
+timeout_seconds = 120.0
+concurrency = 1
+output_dir = "reports/experiments/rag_local_qwen"

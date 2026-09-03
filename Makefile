@@ -1,44 +1,89 @@
-.PHONY: setup install download preprocess index api test eval clean help
+.PHONY: help setup install download preprocess index api ui test test-unit test-integration test-security \
+	coverage lint format format-check typecheck check eval-retrieval eval-rag load-smoke package \
+	docker-config docker-smoke docker-build docker-up docker-down clean
 
-help: ## Show this help message
-	@grep -E '^[a-zA-Z_-]+:.*?## .*$$' $(MAKEFILE_LIST) | sort | awk 'BEGIN {FS = ":.*?## "}; {printf "\033[36m%-20s\033[0m %s\n", $$1, $$2}'
+UV ?= uv
 
-setup: ## Create virtual environment and install dependencies
-	python3 -m venv venv
-	. venv/bin/activate && pip install --upgrade pip && pip install -r requirements.txt
-	@echo "\n✅ Setup complete! Activate with: source venv/bin/activate"
+help: ## Show available commands
+	@awk 'BEGIN {FS = ":.*## "} /^[a-zA-Z_-]+:.*## / {printf "%-20s %s\n", $$1, $$2}' $(MAKEFILE_LIST)
 
-install: ## Install dependencies (assumes venv is active)
-	pip install -r requirements.txt
+setup: ## Create a Python 3.11 environment and install all dependency groups
+	$(UV) sync --all-extras --python 3.11
 
-download: ## Download and prepare the dataset
-	python -m scripts.download_data
+install: ## Install runtime plus UI dependencies
+	$(UV) sync --extra ui --python 3.11
 
-preprocess: ## Preprocess the dataset
-	python -m scripts.download_data
+download: ## Ingest real arXiv metadata (use ARXIV_MAX_RECORDS to limit)
+	$(UV) run python -m scripts.download_data --max-records $${ARXIV_MAX_RECORDS:-15000}
 
-index: ## Build FAISS index and embeddings
-	python -m scripts.build_index
+preprocess: ## Validate, deduplicate, and write a versioned corpus
+	$(UV) run python -m scripts.preprocess_data
 
-api: ## Start the FastAPI server
-	uvicorn src.api.main:app --host 0.0.0.0 --port 8000 --reload
+index: ## Build and atomically activate a versioned FAISS index
+	$(UV) run python -m scripts.build_index
 
-test: ## Run all tests
-	pytest tests/ -v
+api: ## Start FastAPI
+	$(UV) run uvicorn nlp_academic_search.api.main:app --host $${API_HOST:-0.0.0.0} --port $${API_PORT:-8000}
 
-eval: ## Run evaluation benchmarks
-	python -m scripts.run_evaluation
+ui: ## Start Streamlit
+	$(UV) run streamlit run scripts/streamlit_app.py --server.port 8501
 
-clean: ## Remove generated files
-	rm -rf data/processed/* data/embeddings/*
-	rm -rf __pycache__ .pytest_cache
-	find . -type d -name "__pycache__" -exec rm -rf {} + 2>/dev/null || true
+test: test-unit ## Run unit tests
 
-docker-build: ## Build Docker image
-	docker-compose build
+test-unit: ## Run deterministic unit tests
+	$(UV) run pytest tests/unit
 
-docker-up: ## Start services with Docker
-	docker-compose up -d
+test-integration: ## Run local service/model integration tests
+	$(UV) run pytest -m integration
 
-docker-down: ## Stop Docker services
-	docker-compose down
+test-security: ## Run automated security test suite
+	$(UV) run pytest tests/security
+
+coverage: ## Run tests with the configured coverage gate
+	$(UV) run pytest -m "not integration" --cov=nlp_academic_search --cov-report=term-missing
+
+lint: ## Run Ruff lint checks
+	$(UV) run ruff check .
+
+format: ## Format Python sources
+	$(UV) run ruff format .
+
+format-check: ## Verify Python formatting
+	$(UV) run ruff format --check .
+
+typecheck: ## Run Pyright
+	$(UV) run pyright
+
+package: ## Build wheel and source distribution
+	$(UV) run python -m build
+
+check: lint format-check typecheck test-unit test-security coverage package ## Run the local quality gate
+	$(UV) run python -m pip check
+
+eval-retrieval: ## Run leakage-free retrieval evaluation
+	$(UV) run python -m scripts.run_evaluation
+
+eval-rag: ## Run deterministic RAG evaluation
+	$(UV) run python -m scripts.evaluate_rag
+
+load-smoke: ## Run a small smoke load test against Search endpoint
+	$(UV) run python -m scripts.run_load_test --requests 10 --concurrency 2
+
+docker-config: ## Validate Docker Compose configuration
+	docker compose config --quiet
+
+docker-smoke: ## Build and smoke-test API/UI containers
+	./scripts/docker_smoke.sh
+
+docker-build: ## Build service images
+	docker compose build
+
+docker-up: ## Start the stack
+	docker compose up -d
+
+docker-down: ## Stop the stack
+	docker compose down
+
+clean: ## Remove local caches and build outputs (keeps corpus/index data)
+	rm -rf .pytest_cache .ruff_cache .mypy_cache htmlcov dist build nlp_academic_search.egg-info src/nlp_academic_search.egg-info
+	find src scripts tests -type d -name __pycache__ -prune -exec rm -rf {} +

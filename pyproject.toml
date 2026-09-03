@@ -1,27 +1,96 @@
 [build-system]
-requires = ["setuptools>=61.0"]
+requires = ["setuptools>=75,<82"]
 build-backend = "setuptools.build_meta"
 
 [project]
 name = "nlp-academic-search"
-version = "1.0.0"
-description = "NLP Academic Search & RAG Engine — Semantic search for scientific papers with LLM-powered Q&A"
+version = "1.1.0"
+description = "Local academic search and grounded RAG over a versioned paper corpus"
 readme = "README.md"
-requires-python = ">=3.9"
-license = {text = "MIT"}
-authors = [
-    {name = "Linh To"},
+requires-python = ">=3.11,<3.13"
+license = "MIT"
+license-files = ["LICENSE"]
+authors = [{name = "Linh To"}]
+keywords = ["nlp", "rag", "information-retrieval", "faiss", "academic-search"]
+dependencies = [
+    "faiss-cpu>=1.8,<2",
+    "fastapi>=0.115,<1",
+    "httpx>=0.27,<1",
+    "numpy>=1.26,<3",
+    "ollama>=0.4,<1",
+    "pydantic>=2.9,<3",
+    "pydantic-settings>=2.5,<3",
+    "rank-bm25>=0.2.2,<1",
+    "sentence-transformers>=3.2,<6",
+    "torch>=2.2,<3",
+    "uvicorn[standard]>=0.30,<1",
 ]
-keywords = ["nlp", "search", "rag", "embeddings", "faiss", "bm25", "semantic-search"]
+
+[project.optional-dependencies]
+ui = ["streamlit>=1.39,<2"]
+evaluation = ["datasets>=3,<5", "scikit-learn>=1.4,<2"]
+dev = [
+    "build>=1.2,<2",
+    "coverage[toml]>=7.6,<8",
+    "pip-audit>=2.7,<3",
+    "pyright>=1.1.380,<2",
+    "pytest>=8.2,<9",
+    "pytest-asyncio>=0.24,<2",
+    "pytest-cov>=5,<7",
+    "ruff>=0.7,<1",
+    "httpx2>=2,<3",
+]
+
+[tool.setuptools.packages.find]
+where = ["src"]
+include = ["nlp_academic_search*"]
+
+[tool.setuptools.package-data]
+"nlp_academic_search.ui" = ["assets/fonts/*.ttf", "assets/fonts/*.txt"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
-pythonpath = ["."]
-addopts = "-v --tb=short"
+pythonpath = ["src", "."]
+addopts = "-q --tb=short --strict-markers -m 'not integration'"
+markers = ["integration: requires local services, models, or larger data assets"]
+filterwarnings = [
+    "error::DeprecationWarning",
+    "ignore:The 'app' shortcut is deprecated:DeprecationWarning:httpx",
+    "ignore:The 'app' shortcut is deprecated:DeprecationWarning:starlette",
+]
+
+[tool.coverage.run]
+source = ["nlp_academic_search"]
+branch = true
+
+[tool.coverage.report]
+show_missing = true
+skip_covered = true
+fail_under = 80
+omit = [
+    "src/nlp_academic_search/ui/app.py",
+    "src/nlp_academic_search/ui/styles.py",
+]
 
 [tool.ruff]
-target-version = "py310"
+target-version = "py311"
 line-length = 100
 
 [tool.ruff.lint]
-select = ["E", "F", "I", "W"]
+select = ["E", "F", "I", "W", "B", "UP"]
+ignore = ["E501"]
+
+[tool.ruff.lint.per-file-ignores]
+"tests/**/*.py" = ["S101"]
+
+[tool.pyright]
+include = ["src", "scripts", "tests"]
+exclude = ["venv", ".venv", "data"]
+pythonVersion = "3.11"
+venvPath = "."
+venv = ".venv"
+typeCheckingMode = "basic"
+reportMissingTypeStubs = false
+reportUnknownMemberType = false
+reportUnknownVariableType = false
+reportUnknownArgumentType = false

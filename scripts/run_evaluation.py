@@ -1,140 +1,104 @@
-"""
-Run evaluation benchmarks across all search methods.
+"""Thin CLI for reproducible retrieval evaluation."""
 
-Compares BM25, Semantic, Hybrid, and Hybrid + Reranker
-using standard IR metrics.
+from __future__ import annotations
 
-Usage:
-    python -m scripts.run_evaluation
-"""
-
+import argparse
 import json
-import os
-import sys
+import time
 from pathlib import Path
+from typing import Any
 
-os.environ["TOKENIZERS_PARALLELISM"] = "false"
-os.environ["CUDA_VISIBLE_DEVICES"] = ""
-
-sys.path.insert(0, str(Path(__file__).parent.parent))
-
-from src.config import settings
-from src.data.loader import load_papers
-from src.evaluation.metrics import evaluate_search_method, format_evaluation_table
-from src.search.bm25_search import BM25Searcher
-from src.search.hybrid_search import HybridSearcher
-from src.search.reranker import Reranker
-from src.search.semantic_search import SemanticSearcher
+from nlp_academic_search.evaluation.experiment_config import ExperimentConfig
+from nlp_academic_search.evaluation.metrics import MetricSummary, format_evaluation_table
+from nlp_academic_search.evaluation.retrieval_runner import run_retrieval_evaluation
 
 
-# ─── Sample evaluation queries ───────────────────────────────────
-# In a real project, these would be manually annotated or generated
-# For now, we create synthetic queries based on paper content
+def main() -> None:
+    parser = argparse.ArgumentParser(description="Run leakage-free retrieval evaluation benchmark.")
+    parser.add_argument("--config", type=Path, help="Optional experiment TOML configuration")
+    parser.add_argument("--benchmark", type=Path, help="Benchmark JSON; overrides config")
+    parser.add_argument("-k", type=int, help="Evaluation top-K; overrides config")
+    parser.add_argument(
+        "--include-reranker",
+        action=argparse.BooleanOptionalAction,
+        default=None,
+        help="Include Cross-Encoder reranker; overrides config",
+    )
+    parser.add_argument("--run-id", type=str, default="", help="Experiment run identifier")
+    args = parser.parse_args()
 
-def create_evaluation_queries(papers, num_queries=50):
-    """
-    Create evaluation queries from the dataset.
+    config = ExperimentConfig.load(args.config) if args.config else None
+    benchmark = args.benchmark or (config.corpus_path if config else None)
+    benchmark = benchmark or Path("benchmarks/retrieval/in_domain_golden.json")
+    k = args.k if args.k is not None else config.top_k if config else 3
+    configured_reranker = bool(config and config.retrieval_method == "hybrid_reranked")
+    include_reranker = (
+        args.include_reranker if args.include_reranker is not None else configured_reranker
+    )
 
-    Strategy: Use paper titles as queries and mark the source paper
-    + papers with similar categories as relevant.
-    """
-    import random
+    report = run_retrieval_evaluation(
+        benchmark,
+        k,
+        include_reranker=include_reranker,
+        bm25_weight=config.bm25_weight if config else None,
+        candidate_pool=config.candidate_pool if config else None,
+        rrf_k=config.rrf_k if config else 60,
+        reranker_model=config.reranker_model if config else None,
+    )
+    report_payload: dict[str, Any] = dict(report)
+    report_payload["effective_config"] = (
+        config.effective()
+        if config
+        else {
+            "benchmark": str(benchmark.resolve()),
+            "top_k": k,
+            "include_reranker": include_reranker,
+            "config_path": None,
+            "config_sha256": None,
+        }
+    )
 
-    random.seed(42)
+    run_id = args.run_id or f"run_{int(time.time())}"
+    output_dir = (
+        Path("reports/experiments") / run_id if args.run_id or config is None else config.output_dir
+    )
+    output_dir.mkdir(parents=True, exist_ok=True)
+    json_path = output_dir / "retrieval.json"
+    json_path.write_text(json.dumps(report_payload, indent=2, ensure_ascii=False), encoding="utf-8")
 
-    queries = []
-    sample_papers = random.sample(papers, min(num_queries, len(papers)))
+    results: dict[str, MetricSummary] = report["results"]
+    table_md = format_evaluation_table(results)
+    bench_info = report["benchmark"]
+    run_info = report["run"]
+    md_content = (
+        f"""# Retrieval Evaluation Report ({run_id})
 
-    for paper in sample_papers:
-        # The query is derived from the paper's title/abstract
-        # Use the first sentence of the abstract as the query
-        abstract_sentences = paper.abstract.split(".")
-        query = abstract_sentences[0].strip() if abstract_sentences else paper.title
+- **Benchmark Name**: {bench_info["name"]}
+- **Benchmark SHA-256**: `{bench_info["sha256"]}`
+- **Provenance**: {bench_info["provenance"]}
+- **Document Count**: {bench_info["document_count"]}
+- **Query Count**: {bench_info["query_count"]}
+- **Embedding Model**: {run_info["embedding_model"]} ({run_info["embedding_revision"]})
+- **Reranker Model**: {run_info["reranker_model"]}
+- **Evaluation Top-K**: {run_info["k"]}
+- **Timestamp**: {run_info["timestamp"]}
 
-        if len(query) < 10:
-            query = paper.title
+## Results Table
 
-        # The source paper is definitely relevant
-        relevant_ids = [paper.id]
+{table_md}
 
-        queries.append({
-            "query": query,
-            "relevant_ids": relevant_ids,
-        })
+## Limitations
+"""
+        + "\n".join(f"- {lim}" for lim in report["limitations"])
+        + "\n"
+    )
+    md_path = output_dir / "retrieval.md"
+    md_path.write_text(md_content, encoding="utf-8")
 
-    return queries
-
-
-def run_evaluation():
-    """Run full evaluation across all search methods."""
-
-    print("\n" + "=" * 60)
-    print("📊 NLP Academic Search — Evaluation Benchmark")
-    print("=" * 60 + "\n")
-
-    # Load papers
-    papers = load_papers()
-
-    # Create evaluation queries
-    print("📝 Creating evaluation queries...")
-    queries = create_evaluation_queries(papers, num_queries=20)
-    print(f"   Generated {len(queries)} evaluation queries.\n")
-
-    k = 10  # Evaluate @10
-
-    # ─── BM25 ─────────────────────────────────────────────────────
-    print("🔍 Evaluating BM25...")
-    bm25 = BM25Searcher(papers)
-    bm25_results = evaluate_search_method(bm25.search, queries, k=k)
-
-    # ─── Semantic ─────────────────────────────────────────────────
-    print("\n🧠 Evaluating Semantic Search...")
-    semantic = SemanticSearcher(papers)
-    semantic_results = evaluate_search_method(semantic.search, queries, k=k)
-
-    # ─── Hybrid ───────────────────────────────────────────────────
-    print("\n⚡ Evaluating Hybrid Search...")
-    hybrid = HybridSearcher(bm25=bm25, semantic=semantic)
-    hybrid_results = evaluate_search_method(hybrid.search, queries, k=k)
-
-    # ─── Hybrid + Reranker ────────────────────────────────────────
-    print("\n🔄 Evaluating Hybrid + Reranker...")
-    try:
-        reranker = Reranker(device="cpu")
-
-        def hybrid_rerank_search(query, top_k=10):
-            candidates = hybrid.search(query, top_k=top_k * 4)
-            return reranker.rerank(query, candidates, top_k=top_k)
-
-        reranker_results = evaluate_search_method(hybrid_rerank_search, queries, k=k)
-    except Exception as e:
-        import traceback
-        print(f"   ⚠️ Reranker failed: {e}")
-        traceback.print_exc()
-        reranker_results = None
-
-    # ─── Results ──────────────────────────────────────────────────
-    all_results = {
-        "BM25": bm25_results,
-        "SBERT": semantic_results,
-        "Hybrid": hybrid_results,
-    }
-    if reranker_results:
-        all_results["Hybrid + Reranker"] = reranker_results
-
-    print("\n" + "=" * 60)
-    print("📊 EVALUATION RESULTS")
-    print("=" * 60 + "\n")
-    print(format_evaluation_table(all_results))
-    print()
-
-    # Save results to file
-    output_path = settings.data.processed_dir / "evaluation_results.json"
-    settings.data.ensure_dirs()
-    with open(output_path, "w") as f:
-        json.dump(all_results, f, indent=2)
-    print(f"💾 Results saved to {output_path}")
+    print(table_md)
+    print(f"\nReport JSON: {json_path}")
+    print(f"Report MD:   {md_path}")
 
 
 if __name__ == "__main__":
-    run_evaluation()
+    main()

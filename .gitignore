@@ -16,17 +16,22 @@ env/
 # IDE
 .vscode/
 .idea/
+.impeccable/
 *.swp
 *.swo
 *~
 
 # Environment
 .env
+.env.*
+!.env.example
 
 # Data files (too large for git)
 data/raw/
 data/processed/
 data/embeddings/
+data/quarantine/
+data/benchmarks/
 *.npy
 *.index
 *.pkl
@@ -46,3 +51,13 @@ Thumbs.db
 .coverage
 htmlcov/
 .pytest_cache/
+.ruff_cache/
+.mypy_cache/
+
+# Model and package caches
+.cache/
+models/
+*.safetensors
+
+# Local evaluation outputs
+reports/

@@ -1,0 +1,27 @@
+{
+  "name": "rag-golden-v1",
+  "provenance": "Human-authored questions and expected evidence IDs for deterministic local evaluation.",
+  "cases": [
+    {
+      "id": "rag-1",
+      "question": "What architectural change lets the Transformer avoid recurrent sequence processing?",
+      "relevant_source_ids": ["arxiv:1706.03762"],
+      "expected_keywords": ["attention", "recurrence", "Transformer"],
+      "should_refuse": false
+    },
+    {
+      "id": "rag-2",
+      "question": "How does retrieval-augmented generation combine parametric and non-parametric memory?",
+      "relevant_source_ids": ["arxiv:2005.11401"],
+      "expected_keywords": ["retrieval", "generator", "non-parametric"],
+      "should_refuse": false
+    },
+    {
+      "id": "rag-3",
+      "question": "What do these papers prove about the geology of Mars in 1600?",
+      "relevant_source_ids": [],
+      "expected_keywords": [],
+      "should_refuse": true
+    }
+  ]
+}

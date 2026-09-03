@@ -1,0 +1,14 @@
+[experiment]
+name = "retrieval_baseline"
+dataset = "scifact"
+split = "test"
+retrieval_method = "hybrid"
+bm25_weight = 0.4
+semantic_weight = 0.6
+rrf_k = 60
+candidate_pool = 50
+top_k = 10
+random_seed = 42
+timeout_seconds = 30.0
+concurrency = 4
+output_dir = "reports/experiments/retrieval_baseline"

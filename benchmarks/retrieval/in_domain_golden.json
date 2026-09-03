@@ -1,0 +1,51 @@
+{
+  "name": "academic-search-hand-authored-golden-v1",
+  "kind": "human-authored-small-fixture",
+  "provenance": "Queries and graded qrels were authored for this repository from public arXiv metadata; they are not generated from abstract sentences.",
+  "documents": [
+    {
+      "id": "arxiv:1706.03762",
+      "arxiv_id": "1706.03762",
+      "title": "Attention Is All You Need",
+      "abstract": "The dominant sequence transduction models are based on complex recurrent or convolutional neural networks. The Transformer is a new simple network architecture based solely on attention mechanisms, dispensing with recurrence and convolutions entirely.",
+      "authors": ["Ashish Vaswani", "Noam Shazeer", "Niki Parmar", "Jakob Uszkoreit", "Llion Jones", "Aidan N. Gomez", "Lukasz Kaiser", "Illia Polosukhin"],
+      "categories": ["cs.CL", "cs.LG"],
+      "published_at": "2017-06-12T00:00:00Z",
+      "source_url": "https://arxiv.org/abs/1706.03762",
+      "pdf_url": "https://arxiv.org/pdf/1706.03762",
+      "source": "arxiv",
+      "license": null
+    },
+    {
+      "id": "arxiv:1810.04805",
+      "arxiv_id": "1810.04805",
+      "title": "BERT: Pre-training of Deep Bidirectional Transformers for Language Understanding",
+      "abstract": "BERT pre-trains deep bidirectional representations from unlabeled text by jointly conditioning on both left and right context in all layers. The pre-trained model can be fine-tuned with one additional output layer.",
+      "authors": ["Jacob Devlin", "Ming-Wei Chang", "Kenton Lee", "Kristina Toutanova"],
+      "categories": ["cs.CL"],
+      "published_at": "2018-10-11T00:00:00Z",
+      "source_url": "https://arxiv.org/abs/1810.04805",
+      "pdf_url": "https://arxiv.org/pdf/1810.04805",
+      "source": "arxiv",
+      "license": null
+    },
+    {
+      "id": "arxiv:2005.11401",
+      "arxiv_id": "2005.11401",
+      "title": "Retrieval-Augmented Generation for Knowledge-Intensive NLP Tasks",
+      "abstract": "Retrieval-augmented generation combines pre-trained parametric and non-parametric memory for language generation. A dense vector index of Wikipedia is accessed with a neural retriever and passages condition a sequence-to-sequence generator.",
+      "authors": ["Patrick Lewis", "Ethan Perez", "Aleksandra Piktus", "Fabio Petroni", "Vladimir Karpukhin", "Naman Goyal", "Heinrich Küttler", "Mike Lewis", "Wen-tau Yih", "Tim Rocktäschel", "Sebastian Riedel", "Douwe Kiela"],
+      "categories": ["cs.CL", "cs.LG"],
+      "published_at": "2020-05-22T00:00:00Z",
+      "source_url": "https://arxiv.org/abs/2005.11401",
+      "pdf_url": "https://arxiv.org/pdf/2005.11401",
+      "source": "arxiv",
+      "license": null
+    }
+  ],
+  "queries": [
+    {"id": "q1", "query": "Which architectures replace recurrence with attention for sequence transduction?", "qrels": {"arxiv:1706.03762": 2, "arxiv:1810.04805": 1}},
+    {"id": "q2", "query": "How are deeply bidirectional language representations pre-trained?", "qrels": {"arxiv:1810.04805": 2, "arxiv:1706.03762": 1}},
+    {"id": "q3", "query": "How can a generator use retrieved non-parametric memory for knowledge-intensive tasks?", "qrels": {"arxiv:2005.11401": 2, "arxiv:1810.04805": 1}}
+  ]
+}
