@@ -104,9 +104,9 @@ def test_08_internal_exception_no_path_leakage(services, monkeypatch):
         assert "stack" not in str(body).lower()
 
 
-def test_09_cors_headers_strict():
+def test_09_cors_headers_strict(services):
     """Verify untrusted origin request receives no Access-Control-Allow-Origin header."""
-    app = create_app()
+    app = create_app(services)
     with TestClient(app) as client:
         res = client.get("/health", headers={"Origin": "https://attacker.example.com"})
         assert "access-control-allow-origin" not in res.headers
