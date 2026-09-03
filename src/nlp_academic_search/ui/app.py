@@ -24,7 +24,20 @@ API_BASE_URL = os.getenv("API_BASE_URL", "http://localhost:8000")
 
 @st.cache_resource
 def get_client(base_url: str) -> AcademicSearchClient:
-    return AcademicSearchClient(base_url)
+    client = AcademicSearchClient(base_url)
+    try:
+        client.health()
+        return client
+    except APIError:
+        try:
+            import httpx
+            from nlp_academic_search.api.main import create_app
+
+            app = create_app()
+            transport = httpx.ASGITransport(app=app)
+            return AcademicSearchClient("http://inprocess", transport=transport)
+        except Exception:
+            return client
 
 
 @st.cache_data(ttl=8, show_spinner=False)
