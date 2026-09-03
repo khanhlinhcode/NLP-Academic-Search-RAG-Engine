@@ -74,20 +74,20 @@ class RepairingGenerator:
     def generate(self, messages, temperature=0.2):
         self.sync_calls += 1
         if self.sync_calls == 1:
-            return "Novelty rewards unseen results. It adds retrieval value [1]."
+            return "Novelty rewards retrieval systems. It adds retrieval value [1]."
         assert temperature == 0.0
         assert "citation-only editor" in messages[0]["content"]
-        return "Novelty rewards unseen results [1]. It adds retrieval value [1]."
+        return "Novelty rewards retrieval systems [1]. It adds retrieval value [1]."
 
     async def generate_stream_async(self, messages, temperature=0.2):
         self.async_calls += 1
         if self.async_calls == 1:
-            yield "Novelty rewards unseen results. "
+            yield "Novelty rewards retrieval systems. "
             yield "It adds retrieval value [1]."
         else:
             assert temperature == 0.0
             assert "citation-only editor" in messages[0]["content"]
-            yield "Novelty rewards unseen results [1]. "
+            yield "Novelty rewards retrieval systems [1]. "
             yield "It adds retrieval value [1]."
 
     def is_available(self):
@@ -113,7 +113,7 @@ class IncompleteRepairGenerator(RepairingGenerator):
     def generate(self, messages, temperature=0.2):
         del messages, temperature
         self.sync_calls += 1
-        return "Novelty rewards unseen results. It adds retrieval value [1]."
+        return "Novelty rewards retrieval systems. It adds retrieval value [1]."
 
 
 class SemanticRepairGenerator(RepairingGenerator):
@@ -221,6 +221,35 @@ def test_sync_answer_repairs_citations_once(services, monkeypatch):
     assert validation["claim_citation_coverage"] == 1.0
     assert validation["citation_precision"] == 1.0
     assert validation["invalid_indices"] == []
+
+
+def test_suffix_regression_repairs_before_semantic_verification(services, monkeypatch):
+    enable_semantic_verification(monkeypatch)
+    generator = RepairingGenerator()
+    verifier = SequencedVerifier([True])
+    services.rag_generator = generator  # type: ignore[assignment]
+    services.semantic_verifier = verifier  # type: ignore[assignment]
+    monkeypatch.setattr(services, "ollama_available", lambda: True)
+
+    with TestClient(create_app(services)) as client:
+        response = client.post(
+            "/api/v1/ask",
+            json={"question": "Why is novelty evaluation useful?", "top_k": 1},
+        )
+
+    metadata = response.json()["metadata"]
+    assert response.status_code == 200
+    assert generator.sync_calls == 2
+    assert verifier.calls == 1
+    assert metadata["initial_citation_validation"]["valid"] is False
+    assert metadata["initial_citation_validation"]["uncited_claim_count"] == 1
+    assert metadata["initial_citation_validation"]["claim_citation_coverage"] == 0.5
+    assert metadata["citation_validation"]["valid"] is True
+    assert metadata["citation_validation"]["uncited_claim_count"] == 0
+    assert metadata["citation_validation"]["claim_citation_coverage"] == 1.0
+    assert metadata["citation_repair_attempted"] is True
+    assert metadata["citation_repair_succeeded"] is True
+    assert metadata["answer_status"] == "verified"
 
 
 def test_valid_sync_answer_does_not_call_repair(services, monkeypatch):

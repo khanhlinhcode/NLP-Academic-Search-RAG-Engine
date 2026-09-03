@@ -57,7 +57,7 @@ def _protect_periods(text: str) -> str:
     protected = text
     for abbreviation in _ABBREVIATIONS:
         protected = re.sub(
-            re.escape(abbreviation),
+            rf"(?<!\w){re.escape(abbreviation)}",
             lambda match: match.group(0).replace(".", _PRIVATE_DOT),
             protected,
             flags=re.IGNORECASE,

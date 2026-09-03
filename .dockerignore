@@ -1,6 +1,8 @@
 .git
 .github
 .env
+.env.*
+.streamlit/secrets.toml
 .venv
 venv
 data

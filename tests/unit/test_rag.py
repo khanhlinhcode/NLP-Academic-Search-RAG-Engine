@@ -108,6 +108,67 @@ def test_sentence_segmentation_handles_lists_abbreviations_decimals_and_unicode(
     assert validation.claim_citation_coverage == 1.0
 
 
+def test_production_sentence_suffix_regression_requires_sentence_scoped_citations():
+    answer = (
+        "The authors argue that precision and recall, while useful, do not capture "
+        "the value of retrieving relevant documents that are not already found by "
+        "existing systems. Because many retrieval systems are similar, it is "
+        "important to favor systems that retrieve novel relevant documents [1]."
+    )
+
+    assert len(segment_sentences(answer)) == 2
+    validation = validate_citations(answer, 5)
+    assert validation.valid is False
+    assert validation.uncited_claim_count == 1
+    assert validation.claim_citation_coverage == 0.5
+    assert validation.cited_indices == [1]
+    assert validation.invalid_indices == []
+
+
+@pytest.mark.parametrize("word", ["systems", "algorithms", "platforms"])
+def test_abbreviation_does_not_match_a_longer_word_suffix(word):
+    answer = f"The study discusses {word}. Another finding follows [1]."
+
+    assert segment_sentences(answer) == [
+        f"The study discusses {word}.",
+        "Another finding follows [1].",
+    ]
+
+
+@pytest.mark.parametrize(
+    "answer",
+    [
+        "Ms. Smith evaluates retrieval systems. Another finding follows [1].",
+        "Dr. Smith reports the result. Another finding follows [1].",
+        "The method uses IR metrics, e.g. precision and recall. Another finding follows [1].",
+        "The authors, et al., report the result. Another finding follows [1].",
+    ],
+)
+def test_real_abbreviations_remain_protected(answer):
+    assert len(segment_sentences(answer)) == 2
+
+
+def test_decimal_period_is_not_a_sentence_boundary():
+    answer = "Recall reached 0.95. Precision reached 0.90 [1]."
+
+    assert segment_sentences(answer) == [
+        "Recall reached 0.95.",
+        "Precision reached 0.90 [1].",
+    ]
+
+
+def test_vietnamese_sentences_keep_citation_scope():
+    result = validate_citations(
+        "Precision đo độ chính xác của tài liệu được truy xuất. "
+        "Recall đo mức bao phủ tài liệu liên quan [1].",
+        1,
+    )
+
+    assert result.valid is False
+    assert result.uncited_claim_count == 1
+    assert result.claim_citation_coverage == 0.5
+
+
 @pytest.mark.parametrize(
     "answer",
     [

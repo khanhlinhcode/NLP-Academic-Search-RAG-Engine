@@ -80,7 +80,7 @@ class RepairingStreamGenerator:
     async def generate_stream_async(self, messages, temperature=0.2):
         self.calls += 1
         if self.calls == 1:
-            yield "The draft makes an uncited factual claim. "
+            yield "The draft describes retrieval systems. "
             yield "The second factual claim is supported [1]."
         else:
             assert temperature == 0.0
@@ -177,7 +177,7 @@ def test_streamlit_replaces_uncited_draft_with_structurally_valid_answer(service
     assert not app.exception
     assert generator.calls == 2
     assert any("The repaired factual claim is supported [1]." in item for item in rendered)
-    assert not any("The draft makes an uncited factual claim." in item for item in rendered)
+    assert not any("The draft describes retrieval systems." in item for item in rendered)
     assert any("Citation format valid" in item for item in rendered)
     assert not any("Evidence verified" in item for item in rendered)
 
