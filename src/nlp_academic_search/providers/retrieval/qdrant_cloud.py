@@ -238,6 +238,10 @@ class QdrantCloudRetrievalProvider:
                 raise ValueError("Qdrant schema version does not match configuration")
             if payload.get("dense_model") != self.dense_model:
                 raise ValueError("Qdrant dense model does not match configuration")
+            if self.config.dense_vector_size is not None and int(
+                payload.get("dense_vector_size", -1)
+            ) != int(self.config.dense_vector_size):
+                raise ValueError("Qdrant dense vector size does not match configuration")
             if payload.get("sparse_model") != self.sparse_model:
                 raise ValueError("Qdrant sparse model does not match configuration")
             if (

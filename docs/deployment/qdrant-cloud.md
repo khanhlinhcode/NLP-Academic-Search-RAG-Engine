@@ -17,12 +17,15 @@ with a **Cost: Free** label in the cluster's Inference tab and may be region-dep
 export QDRANT_URL='https://...cloud.qdrant.io'
 export QDRANT_API_KEY='...'
 export QDRANT_DENSE_MODEL='sentence-transformers/all-MiniLM-L6-v2'
+export QDRANT_DENSE_VECTOR_SIZE=384
 export QDRANT_SPARSE_MODEL='qdrant/bm25'
 export QDRANT_COLLECTION_ALIAS='academic-papers-current'
 ```
 
 The model value above is an example, not a promise that the model is free on every cluster. Use the
-ID displayed by your cluster. Papers and queries must always use the same model.
+ID displayed by your cluster. Papers and queries must always use the same model. The migration knows
+that `all-MiniLM-L6-v2` has 384 dimensions; for another model, set `QDRANT_DENSE_VECTOR_SIZE` to the
+dimension published for that exact model. It deliberately does not install FastEmbed locally.
 
 ## Migrate and validate
 
@@ -46,4 +49,3 @@ QDRANT_EXPECTED_CORPUS_SHA256=<value printed by qdrant-audit>
 To roll back, update the alias to the preceding validated collection in the Qdrant console. Never
 delete the active collection. Free clusters can be suspended after inactivity; inspect the Qdrant
 console if readiness changes after a long idle period.
-

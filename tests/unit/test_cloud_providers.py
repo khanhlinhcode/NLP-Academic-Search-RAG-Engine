@@ -134,6 +134,7 @@ def groq_config() -> GroqConfig:
         base_url="https://api.groq.test/openai/v1",
         api_key="groq-secret",
         model_name="openai/gpt-oss-20b",
+        reasoning_effort="low",
         timeout_seconds=5,
         max_output_tokens=128,
     )
@@ -144,6 +145,8 @@ def test_groq_non_streaming_and_authorization_header():
         assert request.headers["authorization"] == "Bearer groq-secret"
         body = json.loads(request.content)
         assert body["model"] == "openai/gpt-oss-20b"
+        assert body["reasoning_effort"] == "low"
+        assert body["max_completion_tokens"] == 128
         assert body["stream"] is False
         return httpx.Response(200, json={"choices": [{"message": {"content": "Answer [1]."}}]})
 

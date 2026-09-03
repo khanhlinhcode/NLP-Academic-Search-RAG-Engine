@@ -61,6 +61,23 @@ def test_cloud_profile_requires_qdrant_but_allows_search_without_groq_key():
     assert config.groq.api_key is None
 
 
+def test_cloud_credentials_are_trimmed_before_use():
+    config = Settings(  # type: ignore[call-arg]
+        _env_file=None,  # pyright: ignore[reportCallIssue]
+        qdrant_url="  https://fixture.qdrant.test/\n",
+        qdrant_api_key="database-secret\r\n",
+        qdrant_dense_model=" sentence-transformers/all-MiniLM-L6-v2\n",
+        groq_api_key="groq-secret\n",
+        backend_api_token="backend-secret\n",
+    )
+
+    assert config.qdrant.url == "https://fixture.qdrant.test/"
+    assert config.qdrant.api_key == "database-secret"
+    assert config.qdrant.dense_model == "sentence-transformers/all-MiniLM-L6-v2"
+    assert config.groq.api_key == "groq-secret"
+    assert config.backend_api_token == "backend-secret"
+
+
 def test_cloud_profile_rejects_missing_qdrant_configuration():
     with pytest.raises(ValidationError, match="QDRANT_URL"):
         Settings(  # type: ignore[call-arg]

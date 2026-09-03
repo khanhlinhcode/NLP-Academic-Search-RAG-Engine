@@ -33,6 +33,7 @@ class GroqGenerationProvider:
         self.base_url = config.base_url
         self.timeout_seconds = config.timeout_seconds
         self.max_output_tokens = config.max_output_tokens
+        self.reasoning_effort = config.reasoning_effort
         self._async_transport = async_transport
         self._owns_client = client is None
         self._client = client or httpx.Client(
@@ -52,13 +53,16 @@ class GroqGenerationProvider:
     def _payload(
         self, messages: list[dict[str, str]], temperature: float, *, stream: bool
     ) -> dict[str, Any]:
-        return {
+        payload: dict[str, Any] = {
             "model": self.model_name,
             "messages": messages,
             "temperature": temperature,
             "max_completion_tokens": self.max_output_tokens,
             "stream": stream,
         }
+        if self.reasoning_effort is not None:
+            payload["reasoning_effort"] = self.reasoning_effort
+        return payload
 
     @staticmethod
     def _retry_after(response: httpx.Response) -> float | None:

@@ -66,6 +66,7 @@ class QdrantConfig(BaseModel):
     api_key: str | None
     collection_alias: str
     dense_model: str | None
+    dense_vector_size: int | None = None
     sparse_model: str
     timeout_seconds: float
     expected_corpus_sha256: str | None
@@ -76,6 +77,7 @@ class GroqConfig(BaseModel):
     base_url: str
     api_key: str | None
     model_name: str
+    reasoning_effort: Literal["low", "medium", "high"] | None = None
     timeout_seconds: float
     max_output_tokens: int
 
@@ -124,6 +126,7 @@ class Settings(BaseSettings):
     qdrant_api_key: str | None = None
     qdrant_collection_alias: str = "academic-papers-current"
     qdrant_dense_model: str | None = None
+    qdrant_dense_vector_size: int | None = Field(default=None, ge=1, le=65536)
     qdrant_sparse_model: str = "qdrant/bm25"
     qdrant_timeout_seconds: float = Field(default=15.0, gt=0, le=120)
     qdrant_expected_corpus_sha256: str | None = None
@@ -131,6 +134,7 @@ class Settings(BaseSettings):
     groq_api_base_url: AnyHttpUrl = "https://api.groq.com/openai/v1"  # type: ignore[assignment]
     groq_api_key: str | None = None
     groq_model: str = "openai/gpt-oss-20b"
+    groq_reasoning_effort: Literal["low", "medium", "high"] | None = None
     groq_timeout_seconds: float = Field(default=120.0, gt=0, le=600)
     groq_max_output_tokens: int = Field(default=1024, ge=1, le=65536)
     backend_api_token: str | None = None
@@ -159,6 +163,23 @@ class Settings(BaseSettings):
     def empty_revision_must_be_none(cls, value: object) -> object:
         if isinstance(value, str) and not value.strip():
             return None
+        return value
+
+    @field_validator(
+        "qdrant_url",
+        "qdrant_api_key",
+        "qdrant_dense_model",
+        "qdrant_expected_corpus_sha256",
+        "groq_api_key",
+        "backend_api_token",
+        mode="before",
+    )
+    @classmethod
+    def cloud_values_must_be_trimmed(cls, value: object) -> object:
+        """Remove clipboard newlines without ever logging credential values."""
+        if isinstance(value, str):
+            cleaned = value.strip()
+            return cleaned or None
         return value
 
     @field_validator("data_raw_dir", "data_processed_dir", "data_embeddings_dir")
@@ -264,6 +285,7 @@ class Settings(BaseSettings):
             api_key=self.qdrant_api_key,
             collection_alias=self.qdrant_collection_alias,
             dense_model=self.qdrant_dense_model,
+            dense_vector_size=self.qdrant_dense_vector_size,
             sparse_model=self.qdrant_sparse_model,
             timeout_seconds=self.qdrant_timeout_seconds,
             expected_corpus_sha256=self.qdrant_expected_corpus_sha256,
@@ -276,6 +298,7 @@ class Settings(BaseSettings):
             base_url=str(self.groq_api_base_url).rstrip("/"),
             api_key=self.groq_api_key,
             model_name=self.groq_model,
+            reasoning_effort=self.groq_reasoning_effort,
             timeout_seconds=self.groq_timeout_seconds,
             max_output_tokens=self.groq_max_output_tokens,
         )

@@ -19,6 +19,10 @@ T = TypeVar("T")
 MIGRATION_SCHEMA_VERSION = 1
 POINT_NAMESPACE = uuid.UUID("f286bf75-38c0-49d1-b3c7-855eff8a2a35")
 MANIFEST_ID = uuid.UUID("0e855fb4-2578-4e41-a0dd-0387bf45ef11")
+KNOWN_DENSE_VECTOR_SIZES = {
+    # Qdrant Cloud's official free-inference quickstart model.
+    "sentence-transformers/all-minilm-l6-v2": 384,
+}
 
 
 def _require_cloud_settings() -> tuple[str, str, str]:
@@ -118,18 +122,30 @@ def _manifest_filter() -> Any:
     )
 
 
+def _dense_vector_size(model_name: str, configured_size: int | None = None) -> int:
+    """Resolve collection dimensions without importing client-side FastEmbed."""
+    if configured_size is not None:
+        return configured_size
+    if known_size := KNOWN_DENSE_VECTOR_SIZES.get(model_name.casefold()):
+        return known_size
+    raise SystemExit(
+        "Unknown dense model vector size. Set QDRANT_DENSE_VECTOR_SIZE to the "
+        "dimension shown for QDRANT_DENSE_MODEL in Qdrant Cloud."
+    )
+
+
 def _ensure_collection(client: Any, collection: str, dense_model: str) -> None:
     from qdrant_client import models
 
     if client.collection_exists(collection):
         return
-    dense_size = int(client.get_embedding_size(dense_model))
+    dense_size = _dense_vector_size(dense_model, settings.qdrant.dense_vector_size)
     client.create_collection(
         collection_name=collection,
         vectors_config={
             "dense": models.VectorParams(size=dense_size, distance=models.Distance.COSINE)
         },
-        sparse_vectors_config={"sparse": models.SparseVectorParams()},
+        sparse_vectors_config={"sparse": models.SparseVectorParams(modifier=models.Modifier.IDF)},
         on_disk_payload=True,
     )
     schemas: dict[str, Any] = {
@@ -211,6 +227,9 @@ def _upsert_corpus(
                     "corpus_sha256": manifest.corpus_sha256,
                     "paper_count": len(papers),
                     "dense_model": dense_model,
+                    "dense_vector_size": _dense_vector_size(
+                        dense_model, settings.qdrant.dense_vector_size
+                    ),
                     "sparse_model": settings.qdrant.sparse_model,
                     "source": manifest.source,
                     "migrated_at": datetime.now(UTC).isoformat(),
