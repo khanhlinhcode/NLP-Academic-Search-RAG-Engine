@@ -1,6 +1,9 @@
 services:
   - type: web
     name: nlp-academic-search-api
-    runtime: docker
+    env: docker
     plan: free
     region: singapore
+    envVars:
+      - key: PORT
+        value: 8000
