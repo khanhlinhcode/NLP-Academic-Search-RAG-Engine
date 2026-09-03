@@ -1,0 +1,6 @@
+services:
+  - type: web
+    name: nlp-academic-search-api
+    runtime: docker
+    plan: free
+    region: singapore
