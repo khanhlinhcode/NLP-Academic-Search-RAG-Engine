@@ -5,6 +5,7 @@ from __future__ import annotations
 import os
 from collections.abc import Iterable
 
+import httpx
 import streamlit as st
 
 from nlp_academic_search.ui.api_client import AcademicSearchClient, APIError
@@ -30,7 +31,6 @@ def get_client(base_url: str) -> AcademicSearchClient:
         return client
     except APIError:
         try:
-            import httpx
             from nlp_academic_search.api.main import create_app
 
             app = create_app()
