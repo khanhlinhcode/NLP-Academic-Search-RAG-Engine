@@ -201,6 +201,61 @@ def test_rag_runner_uses_injected_clock(sample_benchmark_path: Path):
     assert [row["latency_ms"] for row in result["cases"]] == [10.0, 20.0]
 
 
+def test_rag_runner_aggregates_semantic_pilot_metrics(tmp_path: Path):
+    path = tmp_path / "semantic.json"
+    path.write_text(
+        json.dumps(
+            {
+                "name": "semantic-pilot",
+                "cases": [
+                    {"id": "verified", "question": "Question one", "should_refuse": False},
+                    {"id": "withheld", "question": "Question two", "should_refuse": True},
+                ],
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        question = json.loads(request.content)["question"]
+        verified = question.endswith("one")
+        return httpx.Response(
+            200,
+            json={
+                "answer": (
+                    "A supported answer [1]."
+                    if verified
+                    else "Not enough verified evidence in the retrieved sources."
+                ),
+                "sources": [{"id": "p1"}] if verified else [],
+                "metadata": {
+                    "answer_status": "verified" if verified else "refused_unverified",
+                    "semantic_verification_attempted": True,
+                    "semantic_verification_succeeded": verified,
+                    "verification_latency_ms": 10 if verified else 30,
+                    "citation_repair_attempted": not verified,
+                    "citation_repair_succeeded": False,
+                    "semantic_validation": {
+                        "semantic_claim_coverage": 1.0 if verified else 0.0,
+                        "supported_claim_count": 1 if verified else 0,
+                        "unsupported_claim_count": 0 if verified else 1,
+                        "insufficient_claim_count": 0,
+                        "evidence_quote_validity": 1.0 if verified else 0.0,
+                    },
+                },
+            },
+        )
+
+    report = run_rag_evaluation("http://test-api", path, transport=httpx.MockTransport(handler))
+    aggregate = report["aggregate"]
+    assert aggregate["verified_answer_rate"] == 0.5
+    assert aggregate["refusal_due_to_verification_rate"] == 0.5
+    assert aggregate["semantic_verification_latency_p50_ms"] == 20.0
+    assert aggregate["semantic_verification_latency_p95_ms"] == 29.0
+    assert aggregate["repair_rate"] == 0.5
+    assert aggregate["repair_success_rate"] == 0.0
+
+
 def test_rag_runner_refusal_cases(tmp_path: Path):
     bench_data = {
         "name": "refusal-test",

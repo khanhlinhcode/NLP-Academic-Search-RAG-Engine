@@ -180,6 +180,13 @@ class Settings(BaseSettings):
             return None
         return value
 
+    @field_validator("verification_model_name", mode="before")
+    @classmethod
+    def empty_verification_model_must_be_none(cls, value: object) -> object:
+        if isinstance(value, str):
+            return value.strip() or None
+        return value
+
     @field_validator(
         "qdrant_url",
         "qdrant_api_key",

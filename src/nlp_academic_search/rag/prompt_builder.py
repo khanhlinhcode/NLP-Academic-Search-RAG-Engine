@@ -30,8 +30,9 @@ Return only the repaired answer. Preserve the draft's supported meaning and word
 Every factual sentence must end with one or more supporting source indices before final punctuation.
 A citation supports only its own sentence, so repeat an index in every sentence that uses it.
 Delete unsupported claims and fix invalid source indices using only the supplied excerpts.
+Split compound claims into atomic sentences when that makes source support unambiguous.
 Do not add facts, citations, titles, authors, identifiers, URLs, commentary, or a bibliography.
-If no supported answer remains, return exactly: 'Not enough evidence in the retrieved sources.'"""
+If no supported answer remains, return exactly: 'Not enough verified evidence in the retrieved sources.'"""
 
 
 class InsufficientContextError(ValueError):
@@ -44,6 +45,7 @@ class PromptPackage:
     papers: list[Paper]
     estimated_context_tokens: int
     truncated: bool
+    question: str
     version: str = PROMPT_VERSION
 
 
@@ -97,6 +99,7 @@ def build_rag_messages(
         papers=selected,
         estimated_context_tokens=(used + 3) // 4,
         truncated=truncated,
+        question=question.strip(),
     )
 
 

@@ -83,7 +83,7 @@ def format_duration(milliseconds: object) -> str:
 
 def render_masthead(health: dict | None, health_error: str | None) -> None:
     connected = health is not None
-    ready = bool(health and health.get("search_ready"))
+    ready = bool(health and health.get("status") == "ready")
     status_label = "READY" if ready else "DEGRADED" if connected else "OFFLINE"
     status_class = "ready" if ready else "offline"
     papers = f"{health.get('total_papers', 0):,}" if health else "—"
@@ -123,6 +123,10 @@ def render_pipeline(health: dict | None) -> None:
     providers = (health or {}).get("providers", {})
     retrieval_name = str(providers.get("retrieval", "local")).upper()
     generation_name = str(providers.get("generation", "ollama")).upper()
+    verification_enabled = bool(
+        health and health.get("providers", {}).get("verification") != "disabled"
+    )
+    verification_ready = bool(health and health.get("verification_available"))
     st.markdown('<h3 class="rail-title">Retrieval pipeline</h3>', unsafe_allow_html=True)
     st.markdown(
         f"""
@@ -143,6 +147,8 @@ def render_pipeline(health: dict | None) -> None:
         (bool(health and health.get("total_papers")), "Paper index loaded"),
         (generation_ready, f"{generation_name} model available"),
     ]
+    if verification_enabled:
+        checks.append((verification_ready, "Semantic verifier available"))
     for ok, label in checks:
         state = "Ready" if ok else "Check"
         color = "ready" if ok else "offline"
@@ -389,12 +395,15 @@ def render_sources(sources: list, metadata: dict | None = None) -> None:
         latencies = metadata.get("latencies") or {}
         retrieval = metadata.get("retrieval_ms", latencies.get("retrieval_ms"))
         generation = latencies.get("generation_ms")
+        verification = latencies.get("verification_ms", metadata.get("verification_latency_ms"))
         total = latencies.get("total_ms", metadata.get("latency_ms"))
         timing = []
         if retrieval is not None:
             timing.append(f"retrieve {format_duration(retrieval)}")
         if generation is not None:
             timing.append(f"generate {format_duration(generation)}")
+        if verification:
+            timing.append(f"verify {format_duration(verification)}")
         if total is not None:
             timing.append(f"total {format_duration(total)}")
         method = safe(str(metadata.get("retrieval_method", "hybrid")).upper())
@@ -469,12 +478,17 @@ def render_citation_verdict(metadata: dict) -> None:
     semantic = metadata.get("semantic_validation") or {}
     if status == "verified" and semantic.get("valid"):
         label = "Evidence verified"
-        detail = "Claims have valid citations and exact supporting source quotes"
+        detail = "Every factual claim has source-backed evidence"
         css_class = "is-complete"
         dot_class = "ready"
     elif status in {"refused_unverified", "refused_insufficient_context"}:
         label = "Answer withheld"
-        detail = "Not enough verified evidence in the retrieved sources"
+        detail = "The generated draft could not be verified against the retrieved evidence"
+        css_class = "is-warning"
+        dot_class = "warning"
+    elif status == "verification_unavailable":
+        label = "Semantic verification unavailable"
+        detail = "Citation structure passed, but evidence support was not verified"
         css_class = "is-warning"
         dot_class = "warning"
     elif citation.get("valid"):
@@ -500,6 +514,7 @@ def render_ask(client: AcademicSearchClient, health: dict | None) -> None:
         health
         and health.get("rag_enabled")
         and health.get("generation_available", health.get("ollama_available"))
+        and (not health.get("verification_required") or health.get("verification_available"))
     )
     reranker_available = (health or {}).get("providers", {}).get("reranker") != "disabled"
     with st.form("ask-form", border=False):
@@ -529,9 +544,21 @@ def render_ask(client: AcademicSearchClient, health: dict | None) -> None:
             )
 
     if not rag_ready:
+        verification_blocked = bool(
+            health
+            and health.get("verification_required")
+            and not health.get("verification_available")
+        )
+        unavailable_detail = (
+            "Question answering is withheld because semantic verification is required but its "
+            "provider is unavailable. Search remains available; verify the verifier model and "
+            "provider quota."
+            if verification_blocked
+            else "Question answering is unavailable because the configured generation provider "
+            "is not ready. Search remains available; verify the provider key, model and quota."
+        )
         st.info(
-            "Question answering is unavailable because the configured generation provider is not "
-            "ready. Search remains available; verify the provider key, model and quota.",
+            unavailable_detail,
             icon=None,
         )
 
@@ -592,11 +619,27 @@ def render_ask(client: AcademicSearchClient, health: dict | None) -> None:
                         state_class = (
                             "is-complete"
                             if raw_status == "complete"
+                            else "is-error"
+                            if raw_status == "failed"
                             else "is-warning"
-                            if raw_status in {"needs repair", "needs review"}
+                            if raw_status
+                            in {
+                                "needs repair",
+                                "needs review",
+                                "unavailable",
+                                "withheld",
+                                "skipped",
+                                "disabled",
+                            }
                             else ""
                         )
-                        dot_class = "warning" if state_class == "is-warning" else "ready"
+                        dot_class = (
+                            "offline"
+                            if state_class == "is-error"
+                            else "warning"
+                            if state_class == "is-warning"
+                            else "ready"
+                        )
                         stage_slot.markdown(
                             f'<div class="pipeline-state {state_class}">'
                             f'<span class="status-dot {dot_class}"></span>'
@@ -626,14 +669,12 @@ def render_ask(client: AcademicSearchClient, health: dict | None) -> None:
                 else:
                     citation = metadata.get("citation_validation") or {}
                     status = metadata.get("answer_status")
-                    if status in {"verified", "structurally_valid"}:
-                        detail = (
-                            "Evidence verified" if status == "verified" else "Citations verified"
-                        )
+                    semantic = metadata.get("semantic_validation") or {}
+                    if status == "verified" and semantic.get("valid"):
                         stage_slot.markdown(
-                            f'<div class="pipeline-state is-complete">'
-                            f'<span class="status-dot ready"></span>'
-                            f"<strong>Answer ready</strong><span>{detail}</span></div>",
+                            '<div class="pipeline-state is-complete">'
+                            '<span class="status-dot ready"></span>'
+                            "<strong>Answer ready</strong><span>Evidence verified</span></div>",
                             unsafe_allow_html=True,
                         )
                     elif status in {"refused_unverified", "refused_insufficient_context"}:
@@ -650,12 +691,28 @@ def render_ask(client: AcademicSearchClient, health: dict | None) -> None:
                             "<strong>Needs citation review</strong><span>One or more factual sentences lack a valid source</span></div>",
                             unsafe_allow_html=True,
                         )
-                    else:
+                    elif status == "verification_unavailable":
                         stage_slot.markdown(
                             '<div class="pipeline-state is-warning">'
                             '<span class="status-dot warning"></span>'
-                            "<strong>Verification pending</strong>"
-                            "<span>Citation format is not semantic evidence verification</span></div>",
+                            "<strong>Semantic verification unavailable</strong>"
+                            "<span>Citation structure passed; evidence support was not verified</span></div>",
+                            unsafe_allow_html=True,
+                        )
+                    elif status == "structurally_valid":
+                        stage_slot.markdown(
+                            '<div class="pipeline-state is-warning">'
+                            '<span class="status-dot warning"></span>'
+                            "<strong>Citation format valid</strong>"
+                            "<span>Semantic evidence verification is disabled</span></div>",
+                            unsafe_allow_html=True,
+                        )
+                    else:
+                        stage_slot.markdown(
+                            '<div class="pipeline-state is-error">'
+                            '<span class="status-dot offline"></span>'
+                            "<strong>Answer withheld</strong>"
+                            "<span>The draft did not pass final validation</span></div>",
                             unsafe_allow_html=True,
                         )
                     history.append(
@@ -701,9 +758,9 @@ def render_ask(client: AcademicSearchClient, health: dict | None) -> None:
                 """
                 <section class="empty-sheet">
                   <h3>Ask for a synthesis, not a guess</h3>
-                  <p>The answer streams from your local Ollama model and is constrained
-                  to retrieved abstracts. Numbered citations map directly to the
-                  evidence ledger.</p>
+                  <p>The answer streams from the configured generation provider and is
+                  constrained to retrieved abstracts. Numbered citations map directly
+                  to the evidence ledger.</p>
                 </section>
                 """,
                 unsafe_allow_html=True,

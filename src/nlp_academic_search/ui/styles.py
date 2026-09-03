@@ -410,6 +410,7 @@ def stylesheet() -> str:
     /* Progress & Pipeline State (PROMPT 3) */
     .pipeline-state {
         display: flex;
+        flex-wrap: wrap;
         align-items: center;
         gap: 0.65rem;
         margin-bottom: 1.1rem;
@@ -418,6 +419,7 @@ def stylesheet() -> str:
         border-radius: 10px;
         border: 1px solid var(--border-subtle);
         font: 500 0.84rem/1.4 var(--font-sans);
+        overflow-wrap: anywhere;
     }
 
     .pipeline-state.is-complete {
@@ -548,6 +550,13 @@ def stylesheet() -> str:
         grid-template-columns: 2rem minmax(0, 1fr) auto;
         gap: 0.5rem;
         align-items: baseline;
+        min-width: 0;
+    }
+
+    .source-title, .source-meta, .paper-title, .paper-abstract, .question,
+    [data-testid="stAlert"], [data-testid="stMarkdownContainer"] {
+        overflow-wrap: anywhere;
+        word-break: normal;
     }
 
     /* Evidence Ledger Header & Timing */
@@ -680,6 +689,19 @@ def stylesheet() -> str:
         .st-key-search_rail, .st-key-evidence_rail, .st-key-empty_evidence_rail {
             border-radius: 12px; padding: 1rem; margin-top: 1.5rem;
         }
+    }
+
+    @media (max-width: 420px) {
+        .block-container { padding: 0.75rem 0.65rem 2.5rem; }
+        .masthead { padding: 1rem; margin-bottom: 1.25rem; }
+        .engine-meta { grid-template-columns: minmax(0, 1fr) auto; gap: 0.35rem 0.75rem; }
+        .paper-entry { padding: 1rem; }
+        .paper-meta-chips, .paper-abstract { margin-left: 0; }
+        .source-meta { margin-left: 0; font-size: 0.875rem; }
+        .source-heading { grid-template-columns: 1.7rem minmax(0, 1fr); }
+        .pipeline-state { align-items: flex-start; font-size: 0.875rem; }
+        [data-testid="stTextInput"] input, [data-testid="stTextArea"] textarea,
+        [data-baseweb="select"] > div { font-size: 1rem !important; }
     }
 
     @media (prefers-reduced-motion: reduce) {

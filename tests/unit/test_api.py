@@ -1,8 +1,11 @@
+import pytest
 from fastapi.testclient import TestClient
 
 from nlp_academic_search.api.main import create_app
 from nlp_academic_search.config import settings
+from nlp_academic_search.providers.verification.base import SemanticVerificationTimeout
 from nlp_academic_search.rag.generator import ModelUnavailableError
+from nlp_academic_search.rag.verification import SemanticValidation
 
 
 def test_health_search_and_cors(services, monkeypatch):
@@ -105,6 +108,74 @@ class IncompleteRepairGenerator(RepairingGenerator):
         return "Novelty rewards unseen results. It adds retrieval value [1]."
 
 
+class SemanticRepairGenerator(RepairingGenerator):
+    def generate(self, messages, temperature=0.2):
+        self.sync_calls += 1
+        return (
+            "The Transformer uses attention instead of recurrence [1]."
+            if self.sync_calls > 1
+            else "The Transformer is always perfect [1]."
+        )
+
+    async def generate_stream_async(self, messages, temperature=0.2):
+        self.async_calls += 1
+        yield (
+            "The Transformer uses attention instead of recurrence [1]."
+            if self.async_calls > 1
+            else "The Transformer is always perfect [1]."
+        )
+
+
+class SequencedVerifier:
+    provider_name = "groq"
+    model_name = "verifier-model"
+    verifier_independent = True
+
+    def __init__(self, outcomes: list[bool]) -> None:
+        self.outcomes = outcomes
+        self.calls = 0
+
+    def verify(self, answer, sources, question):
+        del answer, sources, question
+        valid = self.outcomes[min(self.calls, len(self.outcomes) - 1)]
+        self.calls += 1
+        return SemanticValidation(
+            valid=valid,
+            total_factual_claims=1,
+            supported_claim_count=int(valid),
+            unsupported_claim_count=int(not valid),
+            insufficient_claim_count=0,
+            semantic_claim_coverage=float(valid),
+            evidence_quote_validity=float(valid),
+            verifier_provider=self.provider_name,
+            verifier_model=self.model_name,
+            verifier_independent=True,
+        )
+
+    def is_available(self):
+        return True
+
+    def close(self):
+        return None
+
+
+class TimeoutVerifier(SequencedVerifier):
+    def verify(self, answer, sources, question):
+        del answer, sources, question
+        self.calls += 1
+        raise SemanticVerificationTimeout("verification timeout")
+
+    def is_available(self):
+        return False
+
+
+def enable_semantic_verification(monkeypatch, *, fail_closed=True):
+    monkeypatch.setattr(settings, "semantic_verification_enabled", True)
+    monkeypatch.setattr(settings, "verification_provider", "groq")
+    monkeypatch.setattr(settings, "verification_fail_closed", fail_closed)
+    monkeypatch.setattr(settings, "max_rag_repair_attempts", 1)
+
+
 def test_sync_answer_repairs_citations_once(services, monkeypatch):
     generator = RepairingGenerator()
     services.rag_generator = generator  # type: ignore[assignment]
@@ -151,7 +222,7 @@ def test_valid_sync_answer_does_not_call_repair(services, monkeypatch):
     assert metadata["citation_repair_succeeded"] is None
 
 
-def test_incomplete_repair_stops_after_one_pass_and_stays_invalid(services, monkeypatch):
+def test_incomplete_repair_stops_after_one_pass_and_returns_refusal(services, monkeypatch):
     generator = IncompleteRepairGenerator()
     services.rag_generator = generator  # type: ignore[assignment]
     monkeypatch.setattr(services, "ollama_available", lambda: True)
@@ -167,8 +238,11 @@ def test_incomplete_repair_stops_after_one_pass_and_stays_invalid(services, monk
     metadata = response.json()["metadata"]
     assert metadata["citation_repair_attempted"] is True
     assert metadata["citation_repair_succeeded"] is False
-    assert metadata["citation_validation"]["valid"] is False
-    assert any("review the answer" in warning for warning in metadata["warnings"])
+    assert metadata["initial_citation_validation"]["valid"] is False
+    assert metadata["citation_validation"]["valid"] is True
+    assert metadata["answer_status"] == "refused_unverified"
+    assert metadata["final_answer_replaced"] is True
+    assert response.json()["answer"] == "Not enough verified evidence in the retrieved sources."
 
 
 def test_stream_repairs_once_and_replaces_draft_before_done(services, monkeypatch):
@@ -190,6 +264,105 @@ def test_stream_repairs_once_and_replaces_draft_before_done(services, monkeypatc
     assert body.index("event: answer_replacement") < body.index("event: done")
     assert '"citation_repair_attempted": true' in body
     assert '"claim_citation_coverage": 1.0' in body
+
+
+def test_semantic_failure_repairs_once_then_becomes_verified(services, monkeypatch):
+    enable_semantic_verification(monkeypatch)
+    generator = SemanticRepairGenerator()
+    verifier = SequencedVerifier([False, True])
+    services.rag_generator = generator  # type: ignore[assignment]
+    services.semantic_verifier = verifier  # type: ignore[assignment]
+
+    with TestClient(create_app(services)) as client:
+        response = client.post(
+            "/api/v1/ask",
+            json={"question": "How does the Transformer avoid recurrence?", "top_k": 1},
+        )
+
+    payload = response.json()
+    assert generator.sync_calls == 2
+    assert verifier.calls == 2
+    assert payload["metadata"]["answer_status"] == "verified"
+    assert payload["metadata"]["semantic_validation"]["valid"] is True
+    assert payload["metadata"]["initial_semantic_validation"]["valid"] is False
+    assert payload["metadata"]["final_answer_replaced"] is True
+    latencies = payload["metadata"]["latencies"]
+    assert latencies["total_ms"] == pytest.approx(
+        latencies["retrieval_ms"] + latencies["generation_ms"] + latencies["verification_ms"],
+        abs=0.03,
+    )
+
+
+def test_semantic_failure_after_one_repair_is_withheld(services, monkeypatch):
+    enable_semantic_verification(monkeypatch)
+    generator = SemanticRepairGenerator()
+    verifier = SequencedVerifier([False, False])
+    services.rag_generator = generator  # type: ignore[assignment]
+    services.semantic_verifier = verifier  # type: ignore[assignment]
+
+    with TestClient(create_app(services)) as client:
+        response = client.post(
+            "/api/v1/ask",
+            json={"question": "How does the Transformer avoid recurrence?", "top_k": 1},
+        )
+
+    payload = response.json()
+    assert generator.sync_calls == 2
+    assert verifier.calls == 2
+    assert payload["answer"] == "Not enough verified evidence in the retrieved sources."
+    assert payload["metadata"]["answer_status"] == "refused_unverified"
+    assert payload["metadata"]["citation_repair_succeeded"] is False
+
+
+def test_verifier_timeout_fails_closed_without_wasting_repair(services, monkeypatch):
+    enable_semantic_verification(monkeypatch)
+    generator = CountingValidGenerator()
+    verifier = TimeoutVerifier([False])
+    services.rag_generator = generator  # type: ignore[assignment]
+    services.semantic_verifier = verifier  # type: ignore[assignment]
+
+    with TestClient(create_app(services)) as client:
+        response = client.post(
+            "/api/v1/ask",
+            json={"question": "How does attention replace recurrence?", "top_k": 1},
+        )
+
+    metadata = response.json()["metadata"]
+    assert generator.sync_calls == 1
+    assert verifier.calls == 1
+    assert metadata["answer_status"] == "refused_unverified"
+    assert metadata["semantic_verification_attempted"] is True
+    assert metadata["semantic_verification_succeeded"] is False
+    assert metadata["failure_reason"] == "SemanticVerificationTimeout"
+
+
+def test_semantic_sse_order_replaces_draft_before_final_done(services, monkeypatch):
+    enable_semantic_verification(monkeypatch)
+    generator = SemanticRepairGenerator()
+    verifier = SequencedVerifier([False, True])
+    services.rag_generator = generator  # type: ignore[assignment]
+    services.semantic_verifier = verifier  # type: ignore[assignment]
+
+    with TestClient(create_app(services)) as client:
+        response = client.post(
+            "/api/v1/ask/stream",
+            json={"question": "How does the Transformer avoid recurrence?", "top_k": 1},
+        )
+
+    body = response.text
+    positions = [
+        body.index("event: sources"),
+        body.index("event: token"),
+        body.index('"name": "structural_validation"'),
+        body.index('"name": "semantic_validation"'),
+        body.index('"name": "answer_repair", "status": "running"'),
+        body.index("event: answer_replacement"),
+        body.index('"name": "final_validation"'),
+        body.index('"name": "generation", "status": "complete"'),
+        body.index("event: done"),
+    ]
+    assert positions == sorted(positions)
+    assert '"answer_status": "verified"' in body
 
 
 def test_validation_error_is_structured(services):
@@ -235,6 +408,19 @@ def test_readiness_fails_when_rag_model_is_unavailable(services, monkeypatch):
     with TestClient(create_app(services)) as client:
         assert client.get("/health/ready").status_code == 503
         assert client.get("/health").json()["status"] == "degraded"
+
+
+def test_readiness_reports_required_verifier_unavailable(services, monkeypatch):
+    enable_semantic_verification(monkeypatch)
+    services.semantic_verifier = TimeoutVerifier([False])  # type: ignore[assignment]
+    monkeypatch.setattr(services, "ollama_available", lambda: True)
+    with TestClient(create_app(services)) as client:
+        response = client.get("/health/ready")
+    payload = response.json()
+    assert response.status_code == 503
+    assert payload["verification_provider"] == "groq"
+    assert payload["verification_available"] is False
+    assert payload["verification_required"] is True
 
 
 def test_bearer_auth_protects_api_but_not_liveness(services, monkeypatch):

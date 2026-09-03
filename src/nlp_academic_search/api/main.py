@@ -249,6 +249,12 @@ def create_app(service_container: ServiceContainer | None = None) -> FastAPI:
             ollama_available=ollama_available,
             generation_available=generation_available,
             semantic_verification_available=verification_available,
+            verification_available=verification_available,
+            verification_provider=settings.verification.provider,
+            verification_model=(
+                settings.verification.model_name if settings.verification.enabled else "disabled"
+            ),
+            verification_required=verification_required,
             index_provenance=retrieval.provenance if retrieval else None,
             models={
                 "embedding": (retrieval.embedding_model if retrieval else None)

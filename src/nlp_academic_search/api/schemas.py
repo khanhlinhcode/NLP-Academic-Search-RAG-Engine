@@ -84,6 +84,7 @@ class AnswerMetadata(BaseModel):
     latencies: StageLatencies
     warnings: list[str]
     citation_validation: CitationValidation
+    initial_citation_validation: CitationValidation | None = None
     citation_repair_attempted: bool = False
     citation_repair_succeeded: bool | None = None
     answer_status: Literal[
@@ -94,10 +95,12 @@ class AnswerMetadata(BaseModel):
         "verification_unavailable",
     ] = "structurally_valid"
     semantic_validation: SemanticValidation | None = None
+    initial_semantic_validation: SemanticValidation | None = None
     semantic_verification_attempted: bool = False
     semantic_verification_succeeded: bool | None = None
     final_answer_replaced: bool = False
     verification_latency_ms: float = 0.0
+    failure_reason: str | None = None
 
 
 class AskResponse(BaseModel):
@@ -121,6 +124,10 @@ class HealthResponse(BaseModel):
     ollama_available: bool
     generation_available: bool = False
     semantic_verification_available: bool = False
+    verification_available: bool = False
+    verification_provider: str = "disabled"
+    verification_model: str = "disabled"
+    verification_required: bool = False
     index_provenance: str | None
     models: dict[str, str]
     checks: dict[str, bool]

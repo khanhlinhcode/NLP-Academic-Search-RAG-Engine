@@ -240,3 +240,45 @@ class TestEvaluateRAGCase:
         assert metrics["context_precision"] == 0.0
         assert metrics["context_recall"] == 0.0
         assert metrics["refusal_correct"] is True
+
+    def test_semantic_verification_metrics_are_not_structural_proxies(self):
+        case = {"relevant_source_ids": ["p1"], "should_refuse": False}
+        response = {
+            "answer": "A supported answer [1].",
+            "sources": [{"id": "p1"}],
+            "metadata": {
+                "answer_status": "verified",
+                "semantic_verification_attempted": True,
+                "semantic_verification_succeeded": True,
+                "verification_latency_ms": 12.5,
+                "citation_repair_attempted": True,
+                "citation_repair_succeeded": True,
+                "semantic_validation": {
+                    "semantic_claim_coverage": 1.0,
+                    "supported_claim_count": 1,
+                    "unsupported_claim_count": 0,
+                    "insufficient_claim_count": 0,
+                    "evidence_quote_validity": 1.0,
+                },
+            },
+        }
+        metrics = evaluate_rag_case(case, response)
+        assert metrics["verified_answer"] == 1.0
+        assert metrics["semantic_claim_coverage"] == 1.0
+        assert metrics["supported_claim_count"] == 1.0
+        assert metrics["semantic_verification_latency_ms"] == 12.5
+        assert metrics["repair_attempted"] == 1.0
+        assert metrics["repair_succeeded"] == 1.0
+        assert metrics["verifier_error"] == 0.0
+
+    def test_verification_refusal_is_counted_as_refusal(self):
+        metrics = evaluate_rag_case(
+            {"relevant_source_ids": [], "should_refuse": True},
+            {
+                "answer": "Not enough verified evidence in the retrieved sources.",
+                "sources": [],
+                "metadata": {"answer_status": "refused_unverified"},
+            },
+        )
+        assert metrics["refusal_correct"] is True
+        assert metrics["refusal_due_to_verification"] == 1.0

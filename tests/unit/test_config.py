@@ -87,3 +87,30 @@ def test_cloud_profile_rejects_missing_qdrant_configuration():
             generation_provider="groq",
             reranker_provider="disabled",
         )
+
+
+def test_semantic_verification_configuration_is_typed() -> None:
+    config = Settings(  # type: ignore[call-arg]
+        _env_file=None,  # pyright: ignore[reportCallIssue]
+        semantic_verification_enabled=True,
+        verification_provider="groq",
+        verification_model_name=" verifier-model ",
+        verification_timeout_seconds=12,
+        verification_fail_closed=True,
+        max_rag_repair_attempts=1,
+    )
+    assert config.verification.model_name == "verifier-model"
+    assert config.verification.fail_closed is True
+
+
+@pytest.mark.parametrize(
+    "values",
+    [
+        {"semantic_verification_enabled": True, "verification_provider": "disabled"},
+        {"verification_fail_closed": True},
+        {"max_rag_repair_attempts": 2},
+    ],
+)
+def test_invalid_semantic_verification_configuration_is_rejected(values) -> None:
+    with pytest.raises(ValidationError):
+        Settings(_env_file=None, **values)  # type: ignore[call-arg]

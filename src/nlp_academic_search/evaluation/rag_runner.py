@@ -32,11 +32,17 @@ class RAGAggregate(TypedDict):
     invalid_citation_rate: float | None
     refusal_correct: float | None
     semantic_claim_coverage: float | None
+    supported_claim_count: float | None
     unsupported_claim_count: float | None
     insufficient_claim_count: float | None
     evidence_quote_validity: float | None
     verified_answer_rate: float | None
-    refused_verification_rate: float | None
+    refusal_due_to_verification_rate: float | None
+    semantic_verification_latency_p50_ms: float | None
+    semantic_verification_latency_p95_ms: float | None
+    repair_rate: float | None
+    repair_success_rate: float | None
+    verifier_error_rate: float | None
     latency_p50_ms: float | None
     latency_p95_ms: float | None
     error_rate: float
@@ -60,6 +66,8 @@ class RAGReport(TypedDict):
     generator_model: str
     generator_revision: str
     judge_model: str
+    verification_provider: str
+    verification_model: str
     retrieval_method: str
     top_k: int
     prompt_version: str
@@ -164,6 +172,12 @@ def run_rag_evaluation(
     successful = [row for row in rows if "metrics" in row]
     answerable = [row for row in successful if not row["should_refuse"]]
     refusal = [row for row in successful if row["should_refuse"]]
+    repaired = [row for row in successful if row["metrics"]["repair_attempted"]]
+    verification_latencies = [
+        float(row["metrics"]["semantic_verification_latency_ms"])
+        for row in successful
+        if row["metrics"]["semantic_verification_latency_ms"] > 0
+    ]
     total = len(cases)
     failed = total - len(successful)
     aggregate: RAGAggregate = {
@@ -178,11 +192,25 @@ def run_rag_evaluation(
         "invalid_citation_rate": _mean(successful, "invalid_citation_rate"),
         "refusal_correct": _mean(refusal, "refusal_correct"),
         "semantic_claim_coverage": _mean(successful, "semantic_claim_coverage"),
+        "supported_claim_count": _mean(successful, "supported_claim_count"),
         "unsupported_claim_count": _mean(successful, "unsupported_claim_count"),
         "insufficient_claim_count": _mean(successful, "insufficient_claim_count"),
         "evidence_quote_validity": _mean(successful, "evidence_quote_validity"),
         "verified_answer_rate": _mean(successful, "verified_answer"),
-        "refused_verification_rate": _mean(successful, "refused_verification"),
+        "refusal_due_to_verification_rate": _mean(successful, "refusal_due_to_verification"),
+        "semantic_verification_latency_p50_ms": round(
+            float(np.percentile(verification_latencies, 50)), 2
+        )
+        if verification_latencies
+        else None,
+        "semantic_verification_latency_p95_ms": round(
+            float(np.percentile(verification_latencies, 95)), 2
+        )
+        if verification_latencies
+        else None,
+        "repair_rate": _mean(successful, "repair_attempted"),
+        "repair_success_rate": _mean(repaired, "repair_succeeded"),
+        "verifier_error_rate": _mean(successful, "verifier_error"),
         "latency_p50_ms": round(float(np.percentile(latencies, 50)), 2) if latencies else None,
         "latency_p95_ms": round(float(np.percentile(latencies, 95)), 2) if latencies else None,
         "error_rate": round(failed / total, 4) if total else 0.0,
@@ -206,7 +234,15 @@ def run_rag_evaluation(
         "generator_revision": (
             "provider-managed" if settings.generation_provider == "groq" else "local-tag-unpinned"
         ),
-        "judge_model": "none (deterministic metrics only)",
+        "judge_model": (
+            settings.verification.model_name
+            if settings.verification.enabled
+            else "none (structural metrics only)"
+        ),
+        "verification_provider": settings.verification.provider,
+        "verification_model": (
+            settings.verification.model_name if settings.verification.enabled else "disabled"
+        ),
         "retrieval_method": retrieval_method,
         "top_k": top_k,
         "prompt_version": PROMPT_VERSION,
@@ -214,6 +250,6 @@ def run_rag_evaluation(
         "cases": rows,
         "limitations": [
             "faithfulness_proxy is deprecated and checks citation structure, not semantic entailment",
-            "No external LLM judge was run; generator tag revision is not content-addressed",
+            "Semantic verification evaluates support within retrieved excerpts, not truth outside the corpus",
         ],
     }

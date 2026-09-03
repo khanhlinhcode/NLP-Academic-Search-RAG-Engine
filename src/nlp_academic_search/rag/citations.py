@@ -28,6 +28,7 @@ _ABBREVIATIONS = (
 )
 _REFUSAL_SENTENCES = (
     "not enough evidence in the retrieved sources",
+    "not enough verified evidence in the retrieved sources",
     "insufficient evidence in the retrieved sources",
     "không đủ bằng chứng trong các nguồn đã truy xuất",
     "không đủ bằng chứng để trả lời",
@@ -86,7 +87,7 @@ def segment_sentences(answer: str) -> list[str]:
     return sentences
 
 
-def _is_refusal(answer: str) -> bool:
+def is_refusal(answer: str) -> bool:
     content = [sentence for sentence in segment_sentences(answer) if not _HEADING.match(sentence)]
     if len(content) != 1:
         return False
@@ -111,6 +112,13 @@ def _is_factual_sentence(sentence: str) -> bool:
     return True
 
 
+def factual_sentences(answer: str) -> list[str]:
+    """Return sentence-scoped claims that require evidence validation."""
+    if is_refusal(answer):
+        return []
+    return [sentence for sentence in segment_sentences(answer) if _is_factual_sentence(sentence)]
+
+
 def validate_citations(answer: str, source_count: int) -> CitationValidation:
     if source_count < 0:
         raise ValueError("source_count must not be negative")
@@ -123,10 +131,8 @@ def validate_citations(answer: str, source_count: int) -> CitationValidation:
     cited = sorted(set(valid_mentions))
     precision = len(valid_mentions) / len(mentioned) if mentioned else 0.0
     source_utilization = len(cited) / source_count if source_count else 0.0
-    refusal = _is_refusal(answer)
-    claim_sentences = [
-        sentence for sentence in segment_sentences(answer) if _is_factual_sentence(sentence)
-    ]
+    refusal = is_refusal(answer)
+    claim_sentences = factual_sentences(answer)
     cited_claims = sum(bool(_CITATION.search(sentence)) for sentence in claim_sentences)
     uncited_claims = 0 if refusal else len(claim_sentences) - cited_claims
     claim_coverage = (

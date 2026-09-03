@@ -4,10 +4,11 @@ from __future__ import annotations
 
 import asyncio
 import json
+import logging
 import time
 from collections.abc import AsyncGenerator, Generator
 from dataclasses import dataclass
-from typing import Annotated
+from typing import Annotated, Literal
 
 from fastapi import APIRouter, Depends, Request
 from fastapi.responses import StreamingResponse
@@ -29,7 +30,7 @@ from nlp_academic_search.providers.generation.base import (
     RAGGenerationError,
 )
 from nlp_academic_search.providers.verification.base import SemanticVerificationError
-from nlp_academic_search.rag.citations import CitationValidation, validate_citations
+from nlp_academic_search.rag.citations import CitationValidation, is_refusal, validate_citations
 from nlp_academic_search.rag.prompt_builder import (
     PROMPT_VERSION,
     InsufficientContextError,
@@ -38,24 +39,45 @@ from nlp_academic_search.rag.prompt_builder import (
     build_rag_messages,
     build_source_list,
 )
-from nlp_academic_search.rag.verification import SemanticValidation, validate_semantic_assessment
+from nlp_academic_search.rag.verification import SemanticValidation
 
 router = APIRouter(prefix="/ask", tags=["RAG"])
+logger = logging.getLogger("academic_search.rag")
 Services = Annotated[ServiceContainer, Depends(get_services)]
 REFUSAL = "Not enough evidence in the retrieved sources."
+UNVERIFIED_REFUSAL = "Not enough verified evidence in the retrieved sources."
+AnswerStatus = Literal[
+    "verified",
+    "structurally_valid",
+    "refused_insufficient_context",
+    "refused_unverified",
+    "verification_unavailable",
+]
+
+
+@dataclass(frozen=True)
+class SemanticCheck:
+    validation: SemanticValidation | None
+    attempted: bool
+    latency_ms: float = 0.0
+    error_category: str | None = None
 
 
 @dataclass(frozen=True)
 class CitationOutcome:
     answer: str
     validation: CitationValidation
+    initial_validation: CitationValidation
     semantic_validation: SemanticValidation | None = None
+    initial_semantic_validation: SemanticValidation | None = None
     repair_attempted: bool = False
     repair_succeeded: bool | None = None
     semantic_attempted: bool = False
     semantic_succeeded: bool | None = None
-    answer_status: str = "structurally_valid"
+    answer_status: AnswerStatus = "structurally_valid"
     verification_latency_ms: float = 0.0
+    final_answer_replaced: bool = False
+    failure_reason: str | None = None
     warning: str | None = None
 
 
@@ -63,54 +85,152 @@ def _sse_event(event: str, payload: dict[str, object]) -> str:
     return f"event: {event}\ndata: {json.dumps(payload, ensure_ascii=False)}\n\n"
 
 
-def _validation_quality(validation: CitationValidation) -> tuple[int, int, int, float, float]:
-    return (
-        int(validation.valid),
-        -len(validation.invalid_indices),
-        -validation.uncited_claim_count,
-        validation.claim_citation_coverage,
-        validation.citation_precision,
+def _log_outcome(request: Request, outcome: CitationOutcome, source_count: int) -> None:
+    logger.info(
+        json.dumps(
+            {
+                "event": "rag_validation_complete",
+                "request_id": getattr(request.state, "request_id", None),
+                "provider": settings.verification.provider,
+                "model": (
+                    settings.verification.model_name
+                    if settings.verification.enabled
+                    else "disabled"
+                ),
+                "answer_status": outcome.answer_status,
+                "source_count": source_count,
+                "structural_valid": outcome.validation.valid,
+                "semantic_valid": bool(
+                    outcome.semantic_validation and outcome.semantic_validation.valid
+                ),
+                "repair_attempted": outcome.repair_attempted,
+                "verification_latency_ms": round(outcome.verification_latency_ms, 2),
+                "error_category": outcome.failure_reason,
+            }
+        )
     )
 
 
-def _verify(
-    services: ServiceContainer, package: PromptPackage, answer: str
-) -> tuple[SemanticValidation | None, float, str | None]:
+def _verify(services: ServiceContainer, package: PromptPackage, answer: str) -> SemanticCheck:
     """Run the optional judge and retain only locally checked evidence spans."""
     if not settings.verification.enabled:
-        return None, 0.0, None
+        return SemanticCheck(None, False)
     verifier = services.semantic_verifier
     if verifier is None:
-        return None, 0.0, "Semantic verification is unavailable."
+        return SemanticCheck(None, False, error_category="not_configured")
     started = time.perf_counter()
     try:
-        result = verifier.assess(package.messages[-1]["content"], answer, package.papers)
-        claims = result["claims"]
-        validation = validate_semantic_assessment(
-            answer,
-            package.papers,
-            claims,
-            provider=verifier.provider_name,
-            model=verifier.model_name,
-            independent=verifier.verifier_independent,
+        validation = verifier.verify(answer, package.papers, package.question)
+        return SemanticCheck(
+            validation,
+            True,
+            (time.perf_counter() - started) * 1000,
         )
-        return validation, (time.perf_counter() - started) * 1000, None
-    except (SemanticVerificationError, RuntimeError, KeyError, TypeError) as exc:
-        return None, (time.perf_counter() - started) * 1000, str(exc)
+    except SemanticVerificationError as exc:
+        return SemanticCheck(
+            None,
+            True,
+            (time.perf_counter() - started) * 1000,
+            type(exc).__name__,
+        )
 
 
 def _status_for(
-    structural: CitationValidation, semantic: SemanticValidation | None, verifier_error: str | None
-) -> str:
-    if structural.valid and semantic is not None and semantic.valid:
+    answer: str, structural: CitationValidation, semantic: SemanticCheck
+) -> AnswerStatus:
+    if is_refusal(answer):
+        return "refused_insufficient_context"
+    validation = semantic.validation
+    if structural.valid and validation is not None and validation.valid:
         return "verified"
     if structural.valid and not settings.verification.enabled:
         return "structurally_valid"
-    if structural.valid and verifier_error:
+    if structural.valid and validation is None and not settings.verification.fail_closed:
         return "verification_unavailable"
-    if structural.valid:
-        return "verification_unavailable"
-    return "refused_unverified" if settings.verification.fail_closed else "verification_unavailable"
+    return "refused_unverified"
+
+
+def _accepted(status: AnswerStatus) -> bool:
+    return status in {
+        "verified",
+        "structurally_valid",
+        "refused_insufficient_context",
+        "verification_unavailable",
+    }
+
+
+def _outcome(
+    *,
+    draft: str,
+    answer: str,
+    initial_structural: CitationValidation,
+    final_structural: CitationValidation,
+    initial_semantic: SemanticCheck,
+    final_semantic: SemanticCheck,
+    status: AnswerStatus,
+    repair_attempted: bool,
+    repair_succeeded: bool | None,
+    failure_reason: str | None = None,
+) -> CitationOutcome:
+    semantic_attempted = initial_semantic.attempted or final_semantic.attempted
+    return CitationOutcome(
+        answer=answer,
+        validation=final_structural,
+        initial_validation=initial_structural,
+        semantic_validation=final_semantic.validation,
+        initial_semantic_validation=initial_semantic.validation,
+        repair_attempted=repair_attempted,
+        repair_succeeded=repair_succeeded,
+        semantic_attempted=semantic_attempted,
+        semantic_succeeded=(
+            final_semantic.validation.valid
+            if final_semantic.validation is not None
+            else False
+            if final_semantic.attempted
+            else False
+            if semantic_attempted
+            else None
+        ),
+        answer_status=status,
+        verification_latency_ms=(
+            initial_semantic.latency_ms
+            if initial_semantic is final_semantic
+            else initial_semantic.latency_ms + final_semantic.latency_ms
+        ),
+        final_answer_replaced=answer != draft,
+        failure_reason=failure_reason,
+        warning=(
+            "Semantic verification is unavailable; the answer has structural checks only."
+            if status == "verification_unavailable"
+            else "Answer withheld because retrieved evidence could not verify every claim."
+            if status == "refused_unverified"
+            else None
+        ),
+    )
+
+
+def _refused_outcome(
+    *,
+    draft: str,
+    package: PromptPackage,
+    initial_structural: CitationValidation,
+    initial_semantic: SemanticCheck,
+    final_semantic: SemanticCheck,
+    repair_attempted: bool,
+    reason: str,
+) -> CitationOutcome:
+    return _outcome(
+        draft=draft,
+        answer=UNVERIFIED_REFUSAL,
+        initial_structural=initial_structural,
+        final_structural=validate_citations(UNVERIFIED_REFUSAL, len(package.papers)),
+        initial_semantic=initial_semantic,
+        final_semantic=final_semantic,
+        status="refused_unverified",
+        repair_attempted=repair_attempted,
+        repair_succeeded=False if repair_attempted else None,
+        failure_reason=reason,
+    )
 
 
 def _validate_and_repair_sync(
@@ -119,25 +239,43 @@ def _validate_and_repair_sync(
     answer: str,
 ) -> CitationOutcome:
     initial = validate_citations(answer, len(package.papers))
-    semantic, latency, verifier_error = (
-        _verify(services, package, answer) if initial.valid else (None, 0.0, None)
+    initial_semantic = (
+        _verify(services, package, answer)
+        if initial.valid and not is_refusal(answer)
+        else SemanticCheck(None, False)
     )
-    status = _status_for(initial, semantic, verifier_error)
-    needs_repair = not initial.valid or (
-        initial.valid and semantic is not None and not semantic.valid
-    )
-    if not needs_repair or settings.verification.max_repair_attempts == 0:
-        return CitationOutcome(
-            answer,
-            initial,
-            semantic,
-            False,
-            None,
-            settings.verification.enabled,
-            semantic.valid if semantic else None,
-            status,
-            latency,
-            verifier_error,
+    status = _status_for(answer, initial, initial_semantic)
+    if _accepted(status):
+        return _outcome(
+            draft=answer,
+            answer=answer,
+            initial_structural=initial,
+            final_structural=initial,
+            initial_semantic=initial_semantic,
+            final_semantic=initial_semantic,
+            status=status,
+            repair_attempted=False,
+            repair_succeeded=None,
+        )
+    if initial_semantic.validation is None and initial.valid:
+        return _refused_outcome(
+            draft=answer,
+            package=package,
+            initial_structural=initial,
+            initial_semantic=initial_semantic,
+            final_semantic=initial_semantic,
+            repair_attempted=False,
+            reason=initial_semantic.error_category or "verification_unavailable",
+        )
+    if settings.verification.max_repair_attempts == 0:
+        return _refused_outcome(
+            draft=answer,
+            package=package,
+            initial_structural=initial,
+            initial_semantic=initial_semantic,
+            final_semantic=initial_semantic,
+            repair_attempted=False,
+            reason="repair_disabled",
         )
     if services.rag_generator is None:
         raise ModelUnavailableError("Generation provider is not configured")
@@ -148,50 +286,46 @@ def _validate_and_repair_sync(
         if not repaired:
             raise GenerationInvalidResponseError("Citation repair returned an empty answer")
     except RAGGenerationError:
-        repaired = answer
+        return _refused_outcome(
+            draft=answer,
+            package=package,
+            initial_structural=initial,
+            initial_semantic=initial_semantic,
+            final_semantic=SemanticCheck(None, False),
+            repair_attempted=True,
+            reason="repair_provider_error",
+        )
     final_structural = validate_citations(repaired, len(package.papers))
-    final_semantic, repair_latency, final_error = (
-        _verify(services, package, repaired) if final_structural.valid else (None, 0.0, None)
+    final_semantic = (
+        _verify(services, package, repaired)
+        if final_structural.valid
+        else SemanticCheck(None, False)
     )
-    final_status = _status_for(final_structural, final_semantic, final_error)
-    final_valid = (
-        final_structural.valid
-        and final_status in {"verified", "structurally_valid"}
-        and not (
-            settings.verification.enabled
-            and settings.verification.fail_closed
-            and final_status != "verified"
+    final_status = _status_for(repaired, final_structural, final_semantic)
+    if _accepted(final_status) and not (
+        initial_semantic.validation is not None
+        and not initial_semantic.validation.valid
+        and final_status == "verification_unavailable"
+    ):
+        return _outcome(
+            draft=answer,
+            answer=repaired,
+            initial_structural=initial,
+            final_structural=final_structural,
+            initial_semantic=initial_semantic,
+            final_semantic=final_semantic,
+            status=final_status,
+            repair_attempted=True,
+            repair_succeeded=True,
         )
-    )
-    if not final_valid and settings.verification.fail_closed:
-        return CitationOutcome(
-            REFUSAL,
-            validate_citations(REFUSAL, 0),
-            final_semantic,
-            True,
-            False,
-            settings.verification.enabled,
-            bool(final_semantic and final_semantic.valid),
-            "refused_unverified",
-            latency + repair_latency,
-            "Answer withheld because evidence could not be verified.",
-        )
-    final_warning = final_error or (
-        "Please review the answer for accuracy because some claims lack citations."
-        if not final_structural.valid
-        else None
-    )
-    return CitationOutcome(
-        repaired,
-        final_structural,
-        final_semantic,
-        True,
-        final_valid,
-        settings.verification.enabled,
-        bool(final_semantic and final_semantic.valid),
-        final_status,
-        latency + repair_latency,
-        final_warning,
+    return _refused_outcome(
+        draft=answer,
+        package=package,
+        initial_structural=initial,
+        initial_semantic=initial_semantic,
+        final_semantic=final_semantic,
+        repair_attempted=True,
+        reason=final_semantic.error_category or "final_validation_failed",
     )
 
 
@@ -199,29 +333,41 @@ async def _validate_and_repair_async(
     services: ServiceContainer,
     package: PromptPackage,
     answer: str,
+    initial: CitationValidation,
+    initial_semantic: SemanticCheck,
 ) -> CitationOutcome:
-    initial = validate_citations(answer, len(package.papers))
-    semantic, latency, verifier_error = (
-        await asyncio.to_thread(_verify, services, package, answer)
-        if initial.valid
-        else (None, 0.0, None)
-    )
-    status = _status_for(initial, semantic, verifier_error)
-    needs_repair = not initial.valid or (
-        initial.valid and semantic is not None and not semantic.valid
-    )
-    if not needs_repair or settings.verification.max_repair_attempts == 0:
-        return CitationOutcome(
-            answer,
-            initial,
-            semantic,
-            False,
-            None,
-            settings.verification.enabled,
-            semantic.valid if semantic else None,
-            status,
-            latency,
-            verifier_error,
+    status = _status_for(answer, initial, initial_semantic)
+    if _accepted(status):
+        return _outcome(
+            draft=answer,
+            answer=answer,
+            initial_structural=initial,
+            final_structural=initial,
+            initial_semantic=initial_semantic,
+            final_semantic=initial_semantic,
+            status=status,
+            repair_attempted=False,
+            repair_succeeded=None,
+        )
+    if initial_semantic.validation is None and initial.valid:
+        return _refused_outcome(
+            draft=answer,
+            package=package,
+            initial_structural=initial,
+            initial_semantic=initial_semantic,
+            final_semantic=initial_semantic,
+            repair_attempted=False,
+            reason=initial_semantic.error_category or "verification_unavailable",
+        )
+    if settings.verification.max_repair_attempts == 0:
+        return _refused_outcome(
+            draft=answer,
+            package=package,
+            initial_structural=initial,
+            initial_semantic=initial_semantic,
+            final_semantic=initial_semantic,
+            repair_attempted=False,
+            reason="repair_disabled",
         )
     if services.rag_generator is None:
         raise ModelUnavailableError("Generation provider is not configured")
@@ -236,52 +382,46 @@ async def _validate_and_repair_async(
         if not repaired:
             raise GenerationInvalidResponseError("Citation repair returned an empty answer")
     except RAGGenerationError:
-        repaired = answer
+        return _refused_outcome(
+            draft=answer,
+            package=package,
+            initial_structural=initial,
+            initial_semantic=initial_semantic,
+            final_semantic=SemanticCheck(None, False),
+            repair_attempted=True,
+            reason="repair_provider_error",
+        )
     final_structural = validate_citations(repaired, len(package.papers))
-    final_semantic, repair_latency, final_error = (
+    final_semantic = (
         await asyncio.to_thread(_verify, services, package, repaired)
         if final_structural.valid
-        else (None, 0.0, None)
+        else SemanticCheck(None, False)
     )
-    final_status = _status_for(final_structural, final_semantic, final_error)
-    final_valid = (
-        final_structural.valid
-        and final_status in {"verified", "structurally_valid"}
-        and not (
-            settings.verification.enabled
-            and settings.verification.fail_closed
-            and final_status != "verified"
+    final_status = _status_for(repaired, final_structural, final_semantic)
+    if _accepted(final_status) and not (
+        initial_semantic.validation is not None
+        and not initial_semantic.validation.valid
+        and final_status == "verification_unavailable"
+    ):
+        return _outcome(
+            draft=answer,
+            answer=repaired,
+            initial_structural=initial,
+            final_structural=final_structural,
+            initial_semantic=initial_semantic,
+            final_semantic=final_semantic,
+            status=final_status,
+            repair_attempted=True,
+            repair_succeeded=True,
         )
-    )
-    if not final_valid and settings.verification.fail_closed:
-        return CitationOutcome(
-            REFUSAL,
-            validate_citations(REFUSAL, 0),
-            final_semantic,
-            True,
-            False,
-            settings.verification.enabled,
-            bool(final_semantic and final_semantic.valid),
-            "refused_unverified",
-            latency + repair_latency,
-            "Answer withheld because evidence could not be verified.",
-        )
-    final_warning = final_error or (
-        "Please review the answer for accuracy because some claims lack citations."
-        if not final_structural.valid
-        else None
-    )
-    return CitationOutcome(
-        repaired,
-        final_structural,
-        final_semantic,
-        True,
-        final_valid,
-        settings.verification.enabled,
-        bool(final_semantic and final_semantic.valid),
-        final_status,
-        latency + repair_latency,
-        final_warning,
+    return _refused_outcome(
+        draft=answer,
+        package=package,
+        initial_structural=initial,
+        initial_semantic=initial_semantic,
+        final_semantic=final_semantic,
+        repair_attempted=True,
+        reason=final_semantic.error_category or "final_validation_failed",
     )
 
 
@@ -336,24 +476,27 @@ def _metadata(
         latencies=StageLatencies(
             retrieval_ms=round(retrieval_ms, 2),
             generation_ms=round(generation_ms, 2),
-            total_ms=round(retrieval_ms + generation_ms, 2),
+            total_ms=round(retrieval_ms + generation_ms + outcome.verification_latency_ms, 2),
             verification_ms=round(outcome.verification_latency_ms, 2),
         ),
         warnings=list(dict.fromkeys(warnings)),
         citation_validation=outcome.validation,
+        initial_citation_validation=outcome.initial_validation,
         citation_repair_attempted=outcome.repair_attempted,
         citation_repair_succeeded=outcome.repair_succeeded,
         answer_status=outcome.answer_status,  # type: ignore[arg-type]
         semantic_validation=outcome.semantic_validation,
+        initial_semantic_validation=outcome.initial_semantic_validation,
         semantic_verification_attempted=outcome.semantic_attempted,
         semantic_verification_succeeded=outcome.semantic_succeeded,
-        final_answer_replaced=outcome.repair_attempted,
+        final_answer_replaced=outcome.final_answer_replaced,
         verification_latency_ms=round(outcome.verification_latency_ms, 2),
+        failure_reason=outcome.failure_reason,
     )
 
 
 @router.post("", response_model=AskResponse, summary="Grounded question answering")
-def ask_question(payload: AskRequest, services: Services) -> AskResponse:
+def ask_question(payload: AskRequest, services: Services, http_request: Request) -> AskResponse:
     if services.rag_generator is None:
         raise ModelUnavailableError("Generation provider is not configured")
     try:
@@ -384,7 +527,8 @@ def ask_question(payload: AskRequest, services: Services) -> AskResponse:
         outcome = _validate_and_repair_sync(services, package, answer)
     finally:
         services.release_generation()
-    generation_ms = (time.perf_counter() - generated_at) * 1000
+    pipeline_ms = (time.perf_counter() - generated_at) * 1000
+    generation_ms = max(0.0, pipeline_ms - outcome.verification_latency_ms)
     metadata = _metadata(
         services=services,
         sources=sources,
@@ -395,6 +539,7 @@ def ask_question(payload: AskRequest, services: Services) -> AskResponse:
         warnings=warnings,
         outcome=outcome,
     )
+    _log_outcome(http_request, outcome, len(sources))
     return AskResponse(
         question=payload.question,
         answer=outcome.answer,
@@ -451,7 +596,7 @@ def ask_question_stream(
             generated_at = time.perf_counter()
             async for token in services.rag_generator.generate_stream_async(package.messages):
                 if await http_request.is_disconnected():
-                    break
+                    return
                 answer_parts.append(token)
                 yield _sse_event("token", {"token": token})
             answer = "".join(answer_parts).strip()
@@ -475,21 +620,46 @@ def ask_question_stream(
                     "status": "complete" if initial_validation.valid else "needs_repair",
                 },
             )
-            if initial_validation.valid and settings.verification.enabled:
+            initial_semantic = SemanticCheck(None, False)
+            if (
+                initial_validation.valid
+                and not is_refusal(answer)
+                and settings.verification.enabled
+            ):
                 yield _sse_event("stage", {"name": "semantic_validation", "status": "running"})
-            outcome = await _validate_and_repair_async(services, package, answer)
-            if settings.verification.enabled:
+                if await http_request.is_disconnected():
+                    return
+                initial_semantic = await asyncio.to_thread(_verify, services, package, answer)
                 yield _sse_event(
                     "stage",
                     {
                         "name": "semantic_validation",
                         "status": "complete"
-                        if outcome.semantic_validation and outcome.semantic_validation.valid
+                        if initial_semantic.validation and initial_semantic.validation.valid
                         else "unavailable"
-                        if outcome.answer_status == "verification_unavailable"
-                        else "needs_repair",
+                        if initial_semantic.validation is None
+                        else "failed",
                     },
                 )
+            elif not is_refusal(answer):
+                yield _sse_event(
+                    "stage",
+                    {
+                        "name": "semantic_validation",
+                        "status": "skipped" if settings.verification.enabled else "disabled",
+                    },
+                )
+            initial_status = _status_for(answer, initial_validation, initial_semantic)
+            will_repair = (
+                not _accepted(initial_status)
+                and not (initial_validation.valid and initial_semantic.validation is None)
+                and settings.verification.max_repair_attempts > 0
+            )
+            if will_repair:
+                yield _sse_event("stage", {"name": "answer_repair", "status": "running"})
+            outcome = await _validate_and_repair_async(
+                services, package, answer, initial_validation, initial_semantic
+            )
             if outcome.repair_attempted:
                 yield _sse_event(
                     "stage",
@@ -516,7 +686,8 @@ def ask_question_stream(
                     else "failed",
                 },
             )
-            generation_ms = (time.perf_counter() - generated_at) * 1000
+            pipeline_ms = (time.perf_counter() - generated_at) * 1000
+            generation_ms = max(0.0, pipeline_ms - outcome.verification_latency_ms)
             metadata = _metadata(
                 services=services,
                 sources=sources,
@@ -527,6 +698,7 @@ def ask_question_stream(
                 warnings=warnings,
                 outcome=outcome,
             )
+            _log_outcome(http_request, outcome, len(sources))
             for warning in metadata.warnings:
                 yield _sse_event("warning", {"message": warning})
             yield _sse_event(

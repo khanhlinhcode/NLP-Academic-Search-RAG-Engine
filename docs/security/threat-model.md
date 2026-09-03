@@ -28,8 +28,8 @@ Threat mitigation status is categorized into:
 | **TM-10** | **Index Poisoning / Mismatch** | Corpus file modified without re-building FAISS index. | Readiness probe checks Ollama availability and index compatibility. Fail with 503. | **Verified Mitigation** | `test_07_corpus_index_mismatch_readiness_failure` |
 | **TM-11** | **Secret / Artifact Leakage** | Sensitive `.env` or data files committed to Docker context. | Multi-stage Docker build copies only build wheel; `.dockerignore` blocks `.env` and `data/`. | **Verified Mitigation** | `test_10_secrets_excluded_from_dockerignore` |
 | **TM-12** | **Container Privilege Escalation** | Container runs as root user inside Docker host. | Dockerfile creates system user `app:app` and executes entrypoint under non-root USER. | **Verified Mitigation** | `test_11_container_runs_non_root` |
-| **TM-13** | **LLM Semantic Entailment Judge** | Hallucination in complex multi-hop claims. | Entailment verification via LLM judge or cross-encoder entailment model. | **Planned Mitigation** | Benchmarked on offline golden sets via `evaluate_rag.py`. |
-| **TM-14** | **Unauthenticated Local Network Access** | Local network user accesses local API without API key. | API authentication middleware (OAuth2 / API Keys). | **Accepted Residual Risk** | Accepted for local single-tenant developer deployment; production deployment requires API Gateway auth. |
+| **TM-13** | **Unsupported Semantic Claim** | A response uses a syntactically valid citation whose paper does not support the claim, or a verifier fabricates an evidence quote. | A provider-neutral semantic verifier returns strict typed claim assessments. The server independently checks exact normalized quotes against the cited title or abstract, permits one repair pass and can fail closed. Same-model verification is marked non-independent. | **Verified Mitigation** | Semantic verifier, provider taxonomy, repair and golden-fixture unit tests. |
+| **TM-14** | **Unauthenticated Network Access** | A network user calls search or ask endpoints without authorization. | When configured, constant-time Bearer-token middleware protects non-public routes; bounded per-subject in-memory rate limits reduce simple abuse. Production cloud configuration requires a backend token. | **Verified Mitigation** | Authentication, CORS and rate-limit API/security tests. |
 
 ---
 
@@ -38,3 +38,15 @@ Threat mitigation status is categorized into:
 - **API Request Concurrency**: Bounded via `asyncio.Semaphore`.
 - **Generation Deadline**: Hard timeout (`timeout_seconds=30.0`) prevents hung sockets.
 - **Model Endpoint Isolation**: Ollama API accessed only over local loopback or container network bridge.
+- **Verification Deadline and Circuit Breaker**: Remote semantic verification uses a configured
+  timeout and a bounded in-memory failure circuit; production fail-closed readiness degrades when
+  required verification is unavailable.
+
+## 4. Residual verification risk
+
+Semantic verification establishes whether retrieved text supports generated claims within the
+configured policy; it does not establish factual truth outside the corpus. Exact quote matching
+shows that evidence exists in a retrieved paper, not that the paper is correct. An LLM verifier can
+also make entailment errors, and using the same model as generation is not independent verification.
+Fail-closed mode reduces exposure to unverified answers at the cost of lower answer coverage,
+additional latency and provider quota.

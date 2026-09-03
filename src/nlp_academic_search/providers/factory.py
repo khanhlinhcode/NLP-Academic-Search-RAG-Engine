@@ -21,6 +21,17 @@ class ProviderBundle:
 
 
 def build_provider_bundle(config: Settings = settings) -> ProviderBundle:
+    verifier: SemanticVerificationProvider | None = None
+    if config.verification.enabled and config.verification.provider == "groq":
+        from nlp_academic_search.providers.verification.groq import (
+            GroqSemanticVerificationProvider,
+        )
+
+        verifier = GroqSemanticVerificationProvider(
+            config.groq,
+            config.verification,
+            generation_model_name=config.active_generation_model,
+        )
     if config.deployment_profile == "cloud":
         from nlp_academic_search.providers.generation.groq import GroqGenerationProvider
         from nlp_academic_search.providers.retrieval.qdrant_cloud import (
@@ -33,13 +44,6 @@ def build_provider_bundle(config: Settings = settings) -> ProviderBundle:
             candidate_pool=config.search.candidate_pool,
         )
         generation = GroqGenerationProvider(config.groq)
-        verifier: SemanticVerificationProvider | None = None
-        if config.verification.enabled and config.verification.provider == "groq":
-            from nlp_academic_search.providers.verification.groq import (
-                GroqSemanticVerificationProvider,
-            )
-
-            verifier = GroqSemanticVerificationProvider(config.groq, config.verification)
         return ProviderBundle(
             retrieval=retrieval, generation=generation, reranker=None, verifier=verifier
         )
@@ -55,5 +59,5 @@ def build_provider_bundle(config: Settings = settings) -> ProviderBundle:
 
         reranker = LocalRerankerProvider()
     return ProviderBundle(
-        retrieval=retrieval, generation=generation, reranker=reranker, verifier=None
+        retrieval=retrieval, generation=generation, reranker=reranker, verifier=verifier
     )

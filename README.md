@@ -6,9 +6,10 @@ Hệ thống local-first để tìm kiếm bài báo khoa học và hỏi đáp 
 Sentence-Transformers, FAISS, Reciprocal Rank Fusion (RRF), Cross-Encoder tùy chọn, FastAPI,
 Streamlit và Ollama.
 
-> **Trạng thái:** Production Pilot (Semantically Verified RAG). Hệ thống đã tích hợp xác thực
-> 2 lớp: Layer 1 Structural Citation Validation và Layer 2 Semantic Evidence Verification qua Groq JSON Schema.
-> Tích hợp 1-pass answer repair, fail-closed safety policy, test coverage >= 80% và hoàn thành các quality gate.
+> **Trạng thái mã nguồn:** Production Pilot candidate (Semantically Verified RAG). Hệ thống có hai
+> lớp kiểm tra: Structural Citation Validation và provider-neutral Semantic Evidence Verification
+> với strict JSON Schema. Kết quả quality gate được báo cáo theo từng lần chạy; trạng thái này không
+> đồng nghĩa production SLA hoặc loại bỏ hoàn toàn hallucination.
 
 ## Mục lục
 
@@ -50,10 +51,15 @@ trung tâm; Streamlit chỉ giao tiếp với API và không trực tiếp tải
 - Semantic index phải có `index_manifest.json` ràng buộc corpus hash, thứ tự document ID, số lượng
   và chiều vector, embedding model/revision, chuẩn hóa, loại FAISS và phiên bản thư viện.
 - Nội dung paper được coi là **untrusted evidence**, không phải instruction cho LLM.
-- Citation validator kiểm tra xác minh 2 lớp:
+- RAG validation có 2 lớp:
   - **Layer 1 (Structural):** Kiểm tra index nguồn và độ phủ trích dẫn theo từng câu factual.
-  - **Layer 2 (Semantic Evidence):** Xác minh bằng chứng ngữ nghĩa qua Groq strict JSON schema. Server tự động kiểm tra exact evidence quote trong retrieved source (NFKC normalized) và kiểm tra tính độc lập của verifier.
-- Hệ thống hỗ trợ chính sách **Fail-Closed**: Nếu bằng chứng không thể xác thực ngữ nghĩa, câu trả lời sẽ bị thu hồi (`refused_unverified`) thay vì trả về nội dung chưa qua kiểm chứng.
+  - **Layer 2 (Semantic Evidence):** Provider trả strict structured claim assessment. Server kiểm
+    tra exact evidence quote trong đúng title/abstract đã citation sau khi chuẩn hóa Unicode NFKC,
+    case và whitespace. Cùng model identifier với generator được ghi là non-independent.
+- Hệ thống hỗ trợ **Fail-Closed**: nếu bằng chứng không thể xác thực ngữ nghĩa, câu trả lời sẽ bị thu
+  hồi (`refused_unverified`) thay vì được đánh dấu ready. Đây là đánh đổi có chủ ý: an toàn grounding
+  cao hơn nhưng answer coverage thấp hơn, đồng thời verification làm tăng latency và quota. Exact
+  quote chỉ chứng minh đoạn evidence tồn tại trong corpus, không chứng minh paper đúng ngoài thực tế.
 
 Corpus runtime nằm trong `data/`, không được commit vào Git. Vì vậy số papers thực tế có thể là
 corpus legacy 15.000 bản ghi hoặc một corpus arXiv mới với metadata đã xác minh.
@@ -179,6 +185,7 @@ chứa source code. Cách này ngăn test vô tình import code từ working dir
 │       ├── data/                 # Paper model, preprocessing, manifests, source adapters
 │       │   └── sources/          # arXiv OAI-PMH và interface nguồn dữ liệu
 │       ├── evaluation/           # Retrieval/RAG metrics
+│       ├── providers/            # Local/cloud retrieval, generation, reranking, verification
 │       ├── rag/                  # Prompt, generator, streaming, citations
 │       ├── search/               # BM25, FAISS, fusion, filters, reranker
 │       ├── ui/                   # Streamlit client, views, styles, assets
@@ -323,6 +330,19 @@ Các route ổn định nằm dưới `/api/v1`; route không version được g
 | `GET /health/ready`           | Readiness của corpus, index và RAG dependency.                   |
 | `GET /stats`                  | Metadata của corpus, index và model.                             |
 
+`metadata.answer_status` là state machine của kết quả cuối:
+
+- `verified`: structural và semantic validation đều pass;
+- `structurally_valid`: citation format pass nhưng semantic verification bị tắt;
+- `verification_unavailable`: citation format pass, verifier không khả dụng và policy cho phép
+  fail-open có cảnh báo;
+- `refused_insufficient_context`: retrieval không cung cấp đủ context;
+- `refused_unverified`: draft hoặc bản repair không vượt final validation.
+
+SSE giữ các event cũ và bổ sung stage `structural_validation`, `semantic_validation`,
+`answer_repair`, `final_validation`. Nếu final answer khác draft, `answer_replacement` xuất hiện
+trước `done`; metadata trong `done` luôn mô tả final answer.
+
 Ví dụ:
 
 ```bash
@@ -377,11 +397,13 @@ uv run python -m scripts.run_evaluation \
 make eval-rag
 ```
 
-Script đánh giá context precision/recall, answer relevance, citation metrics, refusal correctness,
-latency và error rate trên API đang chạy. `citation_coverage` được giữ tương thích ngược và biểu thị
-tỷ lệ nguồn được dùng (cùng nghĩa với `source_utilization`); `claim_citation_coverage` biểu thị tỷ lệ
-câu factual có citation. Các metric này là kiểm tra cấu trúc, không phải semantic entailment. Script
-ghi lại generator model và không giả vờ sử dụng LLM judge.
+Script đánh giá context precision/recall, answer relevance, citation metrics, semantic claim
+coverage, evidence quote validity, refusal correctness, repair, latency và verifier error rate trên
+API đang chạy. `citation_coverage` được giữ tương thích ngược và biểu thị tỷ lệ nguồn được dùng
+(cùng nghĩa với `source_utilization`); `claim_citation_coverage` biểu thị tỷ lệ câu factual có
+citation. `faithfulness_proxy` chỉ là compatibility metric cấu trúc đã deprecated, không phải
+semantic faithfulness. Báo cáo tách model generator, provider/model verifier và tính độc lập của
+verifier.
 
 ## 11. Kiểm tra chất lượng
 
@@ -427,6 +449,12 @@ Mọi biến môi trường và ràng buộc được mô tả trong `.env.examp
 - pin `EMBEDDING_MODEL_REVISION` trước khi build release index;
 - không commit `.env`, corpus, embeddings, model weights hoặc evaluation reports cục bộ.
 
+Semantic verification được bật rõ ràng bằng `SEMANTIC_VERIFICATION_ENABLED`; provider/model,
+timeout, fail-closed và repair budget lần lượt do `VERIFICATION_PROVIDER`,
+`VERIFICATION_MODEL_NAME`, `VERIFICATION_TIMEOUT_SECONDS`, `VERIFICATION_FAIL_CLOSED` và
+`MAX_RAG_REPAIR_ATTEMPTS` điều khiển. Không đặt secret trong repository. Với production
+fail-closed, `/health/ready` chuyển sang degraded nếu verifier bắt buộc không khả dụng.
+
 Ứng dụng có bounded workers, generation concurrency limit, deadline, request ID, structured logs và
 sanitized errors. Ứng dụng chưa có multi-tenant authorization hoặc distributed job queue.
 
@@ -434,10 +462,11 @@ sanitized errors. Ứng dụng chưa có multi-tenant authorization hoặc distr
 
 - Corpus legacy 15.000 dòng không có metadata tác giả/category/ngày/arXiv đã xác minh.
 - Adopted FAISS manifest không chứng minh được historical model-weight provenance.
-- Citation validation chưa phải full semantic entailment.
+- Semantic verifier vẫn có thể đánh giá entailment sai; exact quote validation chỉ là lớp kiểm tra
+  evidence tồn tại, không phải phép chứng minh factual truth ngoài corpus.
 - Chất lượng Ask phụ thuộc trực tiếp vào độ phủ và độ mới của corpus.
 - UI là research workspace cục bộ, chưa phải hệ thống hội thoại đa người dùng có persistent memory.
-- SciFact/BEIR, reranker calibration, load test và security test production vẫn chưa hoàn tất.
+- SciFact/BEIR, reranker calibration và benchmark production với provider thật vẫn chưa hoàn tất.
 
 ## 15. Tài liệu liên quan
 
@@ -461,7 +490,9 @@ Cloud topology:
 Streamlit Community Cloud -> Render FastAPI -> Qdrant Cloud + Groq
 ```
 
-Render image không chứa Torch, Sentence-Transformers, FAISS, Ollama, corpus hoặc model weights.
+Render image không chứa Torch, spaCy, Sentence-Transformers, FAISS, Ollama, corpus hoặc model
+weights. Cloud generation và semantic verification dùng provider bên ngoài; mỗi verification call
+có thêm latency/quota và fail-closed có thể giảm answer coverage.
 Đọc hướng dẫn theo thứ tự:
 
 1. [Deployment architecture](docs/deployment/architecture.md)

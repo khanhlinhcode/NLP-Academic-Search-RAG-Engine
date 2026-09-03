@@ -19,10 +19,21 @@ def evaluate_rag_case(case: dict, response: dict) -> dict[str, float | bool]:
     expected = {word.casefold() for word in case.get("expected_keywords", [])}
     answer_relevance = len(words & expected) / len(expected) if expected else 1.0
     citation = validate_citations(answer, len(sources))
-    refused = "not enough evidence" in answer.casefold()
+    metadata = response.get("metadata") or {}
+    semantic = metadata.get("semantic_validation") or {}
+    status = metadata.get("answer_status")
+    refused = status in {"refused_insufficient_context", "refused_unverified"} or any(
+        phrase in answer.casefold()
+        for phrase in ("not enough evidence", "not enough verified evidence")
+    )
     refusal_correct = refused == bool(case.get("should_refuse", False))
-    semantic = (response.get("metadata") or {}).get("semantic_validation") or {}
-    status = (response.get("metadata") or {}).get("answer_status")
+    repair_attempted = bool(metadata.get("citation_repair_attempted"))
+    repair_succeeded = bool(metadata.get("citation_repair_succeeded"))
+    verifier_error = bool(
+        metadata.get("semantic_verification_attempted")
+        and semantic == {}
+        and status in {"verification_unavailable", "refused_unverified"}
+    )
     groundedness = float(citation.valid and citation.uncited_claim_count == 0)
     return {
         "context_precision": round(context_precision, 4),
@@ -40,9 +51,14 @@ def evaluate_rag_case(case: dict, response: dict) -> dict[str, float | bool]:
         ),
         "refusal_correct": refusal_correct,
         "semantic_claim_coverage": float(semantic.get("semantic_claim_coverage", 0.0)),
+        "supported_claim_count": float(semantic.get("supported_claim_count", 0)),
         "unsupported_claim_count": float(semantic.get("unsupported_claim_count", 0)),
         "insufficient_claim_count": float(semantic.get("insufficient_claim_count", 0)),
         "evidence_quote_validity": float(semantic.get("evidence_quote_validity", 0.0)),
         "verified_answer": float(status == "verified"),
-        "refused_verification": float(status == "refused_unverified"),
+        "refusal_due_to_verification": float(status == "refused_unverified"),
+        "semantic_verification_latency_ms": float(metadata.get("verification_latency_ms", 0.0)),
+        "repair_attempted": float(repair_attempted),
+        "repair_succeeded": float(repair_attempted and repair_succeeded),
+        "verifier_error": float(verifier_error),
     }

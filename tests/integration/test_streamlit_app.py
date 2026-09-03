@@ -11,6 +11,13 @@ import uvicorn
 from streamlit.testing.v1 import AppTest
 
 from nlp_academic_search.api.main import create_app
+from nlp_academic_search.config import settings
+from nlp_academic_search.rag.verification import SemanticValidation
+
+
+@pytest.fixture(autouse=True)
+def _keep_ui_tests_out_of_streamlit_secrets(monkeypatch):
+    monkeypatch.setenv("BACKEND_API_TOKEN", "integration-test-token")
 
 
 def _free_port() -> int:
@@ -95,8 +102,55 @@ class IncompleteRepairStreamGenerator(RepairingStreamGenerator):
         yield "Only this factual sentence has support [1]."
 
 
+class ValidStreamGenerator(RepairingStreamGenerator):
+    async def generate_stream_async(self, messages, temperature=0.2):
+        del messages, temperature
+        self.calls += 1
+        yield "The Transformer uses attention instead of recurrence [1]."
+
+
+class SemanticVerifier:
+    provider_name = "groq"
+    model_name = "verifier-model"
+    verifier_independent = True
+
+    def __init__(self, outcomes: list[bool]) -> None:
+        self.outcomes = outcomes
+        self.calls = 0
+
+    def verify(self, answer, sources, question):
+        del answer, sources, question
+        valid = self.outcomes[min(self.calls, len(self.outcomes) - 1)]
+        self.calls += 1
+        return SemanticValidation(
+            valid=valid,
+            total_factual_claims=1,
+            supported_claim_count=int(valid),
+            unsupported_claim_count=int(not valid),
+            insufficient_claim_count=0,
+            semantic_claim_coverage=float(valid),
+            evidence_quote_validity=float(valid),
+            verifier_provider="groq",
+            verifier_model=self.model_name,
+            verifier_independent=True,
+        )
+
+    def is_available(self):
+        return True
+
+    def close(self):
+        return None
+
+
+def enable_verification(monkeypatch, *, fail_closed=True):
+    monkeypatch.setattr(settings, "semantic_verification_enabled", True)
+    monkeypatch.setattr(settings, "verification_provider", "groq")
+    monkeypatch.setattr(settings, "verification_fail_closed", fail_closed)
+    monkeypatch.setattr(settings, "max_rag_repair_attempts", 1)
+
+
 @pytest.mark.integration
-def test_streamlit_replaces_uncited_draft_with_verified_answer(services, monkeypatch):
+def test_streamlit_replaces_uncited_draft_with_structurally_valid_answer(services, monkeypatch):
     generator = RepairingStreamGenerator()
     services.rag_generator = generator  # type: ignore[assignment]
     monkeypatch.setattr(services, "ollama_available", lambda: True)
@@ -114,7 +168,8 @@ def test_streamlit_replaces_uncited_draft_with_verified_answer(services, monkeyp
     assert generator.calls == 2
     assert any("The repaired factual claim is supported [1]." in item for item in rendered)
     assert not any("The draft makes an uncited factual claim." in item for item in rendered)
-    assert any("Citations verified" in item for item in rendered)
+    assert any("Citation format valid" in item for item in rendered)
+    assert not any("Evidence verified" in item for item in rendered)
 
 
 @pytest.mark.integration
@@ -134,5 +189,88 @@ def test_streamlit_does_not_mark_incomplete_repair_as_ready(services, monkeypatc
     rendered = [str(item.value) for item in app.markdown]
     assert not app.exception
     assert generator.calls == 2
-    assert any("Needs citation review" in item for item in rendered)
+    assert any("Not enough verified evidence" in item for item in rendered)
+    assert any("Answer withheld" in item for item in rendered)
+    assert not any("The final answer still has" in item for item in rendered)
     assert not any("Answer ready" in item for item in rendered)
+
+
+@pytest.mark.integration
+def test_streamlit_marks_only_semantic_valid_answer_as_evidence_verified(services, monkeypatch):
+    enable_verification(monkeypatch)
+    generator = ValidStreamGenerator()
+    verifier = SemanticVerifier([True])
+    services.rag_generator = generator  # type: ignore[assignment]
+    services.semantic_verifier = verifier  # type: ignore[assignment]
+    monkeypatch.setattr(services, "ollama_available", lambda: True)
+
+    with _running_api(services) as port:
+        monkeypatch.setenv("API_BASE_URL", f"http://127.0.0.1:{port}")
+        app = AppTest.from_file(
+            Path(__file__).parents[2] / "scripts" / "streamlit_app.py", default_timeout=10
+        ).run()
+        app.radio[0].set_value("Ask").run()
+        app.text_area[0].input("How does attention replace recurrence?")
+        app.button[0].click().run(timeout=10)
+
+    rendered = [str(item.value) for item in app.markdown]
+    assert not app.exception
+    assert generator.calls == 1
+    assert verifier.calls == 1
+    assert any("Answer ready" in item and "Evidence verified" in item for item in rendered)
+
+
+@pytest.mark.integration
+def test_streamlit_warns_when_semantic_verification_is_unavailable(services, monkeypatch):
+    enable_verification(monkeypatch, fail_closed=False)
+    services.rag_generator = ValidStreamGenerator()  # type: ignore[assignment]
+    services.semantic_verifier = None
+    monkeypatch.setattr(services, "ollama_available", lambda: True)
+
+    with _running_api(services) as port:
+        monkeypatch.setenv("API_BASE_URL", f"http://127.0.0.1:{port}")
+        app = AppTest.from_file(
+            Path(__file__).parents[2] / "scripts" / "streamlit_app.py", default_timeout=10
+        ).run()
+        app.radio[0].set_value("Ask").run()
+        app.text_area[0].input("How does attention replace recurrence?")
+        app.button[0].click().run(timeout=10)
+
+    rendered = [str(item.value) for item in app.markdown]
+    assert not app.exception
+    assert any("Semantic verification unavailable" in item for item in rendered)
+    assert not any("Answer ready" in item for item in rendered)
+
+
+@pytest.mark.integration
+def test_streamlit_disables_ask_when_required_verifier_is_unavailable(services, monkeypatch):
+    enable_verification(monkeypatch, fail_closed=True)
+    services.rag_generator = ValidStreamGenerator()  # type: ignore[assignment]
+    services.semantic_verifier = None
+    monkeypatch.setattr(services, "ollama_available", lambda: True)
+
+    with _running_api(services) as port:
+        monkeypatch.setenv("API_BASE_URL", f"http://127.0.0.1:{port}")
+        app = AppTest.from_file(
+            Path(__file__).parents[2] / "scripts" / "streamlit_app.py", default_timeout=10
+        ).run()
+        app.radio[0].set_value("Ask").run()
+
+    assert not app.exception
+    assert app.button[0].disabled is True
+    assert any(
+        "semantic verification is required" in str(message.value).casefold() for message in app.info
+    )
+
+
+@pytest.mark.integration
+def test_streamlit_backend_unavailable_state_is_explicit(monkeypatch):
+    unavailable_port = _free_port()
+    monkeypatch.setenv("API_BASE_URL", f"http://127.0.0.1:{unavailable_port}")
+    app = AppTest.from_file(
+        Path(__file__).parents[2] / "scripts" / "streamlit_app.py", default_timeout=10
+    ).run()
+
+    assert not app.exception
+    assert any("FastAPI is not reachable" in str(message.value) for message in app.warning)
+    assert any("OFFLINE" in str(markdown.value) for markdown in app.markdown)
