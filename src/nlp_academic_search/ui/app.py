@@ -5,7 +5,6 @@ from __future__ import annotations
 import os
 from collections.abc import Iterable
 
-import httpx
 import streamlit as st
 
 from nlp_academic_search.ui.api_client import AcademicSearchClient, APIError
@@ -31,11 +30,14 @@ def get_client(base_url: str) -> AcademicSearchClient:
         return client
     except APIError:
         try:
+            from fastapi.testclient import TestClient
+
             from nlp_academic_search.api.main import create_app
 
             app = create_app()
-            transport = httpx.ASGITransport(app=app)
-            return AcademicSearchClient("http://inprocess", transport=transport)
+            test_client = TestClient(app)
+            test_client.__enter__()
+            return AcademicSearchClient(base_url, client=test_client)
         except Exception:
             return client
 

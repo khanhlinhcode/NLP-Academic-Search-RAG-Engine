@@ -22,9 +22,10 @@ class AcademicSearchClient:
         *,
         timeout: float = 300.0,
         transport: Any = None,
+        client: Any = None,
     ) -> None:
         self.base_url = base_url.rstrip("/")
-        self._client = httpx.Client(
+        self._client = client or httpx.Client(
             base_url=self.base_url,
             timeout=httpx.Timeout(timeout, connect=3.0),
             transport=transport,
