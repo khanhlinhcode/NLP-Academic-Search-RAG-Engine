@@ -234,7 +234,9 @@ def create_app(service_container: ServiceContainer | None = None) -> FastAPI:
             services.semantic_verification_available() if services and check_ollama else False
         )
         verification_required = settings.verification.enabled and settings.verification.fail_closed
-        rag_ready = not settings.rag_enabled or (generation_available and (not verification_required or verification_available))
+        rag_ready = not settings.rag_enabled or (
+            generation_available and (not verification_required or verification_available)
+        )
         status = (
             "ready" if search_ready and rag_ready else "degraded" if search_ready else "not_ready"
         )
@@ -255,9 +257,16 @@ def create_app(service_container: ServiceContainer | None = None) -> FastAPI:
                 "reranker": settings.reranker.model_name
                 if settings.reranker.enabled
                 else "disabled",
-                "verifier": settings.verification.model_name if settings.verification.enabled else "disabled",
+                "verifier": settings.verification.model_name
+                if settings.verification.enabled
+                else "disabled",
             },
-            checks={"corpus": corpus_ready, "index": index_ready, "generation": generation_available, "verification": not verification_required or verification_available},
+            checks={
+                "corpus": corpus_ready,
+                "index": index_ready,
+                "generation": generation_available,
+                "verification": not verification_required or verification_available,
+            },
             providers={
                 "retrieval": settings.retrieval_provider,
                 "generation": settings.generation_provider,

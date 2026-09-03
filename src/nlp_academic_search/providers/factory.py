@@ -35,7 +35,9 @@ def build_provider_bundle(config: Settings = settings) -> ProviderBundle:
         generation = GroqGenerationProvider(config.groq)
         verifier: SemanticVerificationProvider | None = None
         if config.verification.enabled and config.verification.provider == "groq":
-            from nlp_academic_search.providers.verification.groq import GroqSemanticVerificationProvider
+            from nlp_academic_search.providers.verification.groq import (
+                GroqSemanticVerificationProvider,
+            )
 
             verifier = GroqSemanticVerificationProvider(config.groq, config.verification)
         return ProviderBundle(
@@ -52,4 +54,6 @@ def build_provider_bundle(config: Settings = settings) -> ProviderBundle:
         from nlp_academic_search.providers.reranking.local import LocalRerankerProvider
 
         reranker = LocalRerankerProvider()
-    return ProviderBundle(retrieval=retrieval, generation=generation, reranker=reranker, verifier=None)
+    return ProviderBundle(
+        retrieval=retrieval, generation=generation, reranker=reranker, verifier=None
+    )

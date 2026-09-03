@@ -125,9 +125,13 @@ def validate_semantic_assessment(
     if invalid_spans:
         warnings.append("Verifier evidence spans did not exactly match the cited retrieved source.")
     if factual_claims == 0:
-        warnings.append("Semantic verifier found no factual claim eligible for evidence verification.")
+        warnings.append(
+            "Semantic verifier found no factual claim eligible for evidence verification."
+        )
     if unsupported or insufficient:
-        warnings.append("One or more factual claims were not semantically supported by verified evidence.")
+        warnings.append(
+            "One or more factual claims were not semantically supported by verified evidence."
+        )
     return SemanticValidation(
         valid=bool(factual_claims) and supported == factual_claims and not invalid_spans,
         total_factual_claims=factual_claims,

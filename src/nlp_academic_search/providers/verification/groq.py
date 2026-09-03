@@ -10,7 +10,6 @@ import httpx
 from nlp_academic_search.config import GroqConfig, VerificationConfig
 from nlp_academic_search.data.loader import Paper
 from nlp_academic_search.providers.verification.base import (
-    SemanticVerificationError,
     SemanticVerificationInvalidResponse,
     SemanticVerificationUnavailable,
 )
@@ -76,7 +75,8 @@ class GroqSemanticVerificationProvider:
             {
                 "role": "user",
                 "content": json.dumps(
-                    {"question": question, "answer": answer, "sources": evidence}, ensure_ascii=False
+                    {"question": question, "answer": answer, "sources": evidence},
+                    ensure_ascii=False,
                 ),
             },
         ]
@@ -96,7 +96,9 @@ class GroqSemanticVerificationProvider:
             claims = [ClaimAssessment.model_validate(item) for item in data["claims"]]
             return {"claims": claims}
         except (KeyError, IndexError, TypeError, ValueError, json.JSONDecodeError) as exc:
-            raise SemanticVerificationInvalidResponse("Verifier returned invalid structured output") from exc
+            raise SemanticVerificationInvalidResponse(
+                "Verifier returned invalid structured output"
+            ) from exc
         except httpx.TimeoutException as exc:
             raise SemanticVerificationUnavailable("Semantic verifier timed out") from exc
         except httpx.HTTPError as exc:
@@ -108,7 +110,9 @@ class GroqSemanticVerificationProvider:
         try:
             response = self._client.get("/models", timeout=5.0, headers=self._headers())
             response.raise_for_status()
-            return any(item.get("id") == self.model_name for item in response.json().get("data", []))
+            return any(
+                item.get("id") == self.model_name for item in response.json().get("data", [])
+            )
         except (httpx.HTTPError, ValueError, TypeError):
             return False
 

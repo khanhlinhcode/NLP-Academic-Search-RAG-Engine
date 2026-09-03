@@ -626,11 +626,14 @@ def render_ask(client: AcademicSearchClient, health: dict | None) -> None:
                 else:
                     citation = metadata.get("citation_validation") or {}
                     status = metadata.get("answer_status")
-                    if status == "verified":
+                    if status in {"verified", "structurally_valid"}:
+                        detail = (
+                            "Evidence verified" if status == "verified" else "Citations verified"
+                        )
                         stage_slot.markdown(
-                            '<div class="pipeline-state is-complete">'
-                            '<span class="status-dot ready"></span>'
-                            "<strong>Answer ready</strong><span>Evidence verified</span></div>",
+                            f'<div class="pipeline-state is-complete">'
+                            f'<span class="status-dot ready"></span>'
+                            f"<strong>Answer ready</strong><span>{detail}</span></div>",
                             unsafe_allow_html=True,
                         )
                     elif status in {"refused_unverified", "refused_insufficient_context"}:
@@ -638,6 +641,13 @@ def render_ask(client: AcademicSearchClient, health: dict | None) -> None:
                             '<div class="pipeline-state is-warning">'
                             '<span class="status-dot warning"></span>'
                             "<strong>Answer withheld</strong><span>Evidence could not be verified</span></div>",
+                            unsafe_allow_html=True,
+                        )
+                    elif not citation.get("valid", True):
+                        stage_slot.markdown(
+                            '<div class="pipeline-state is-warning">'
+                            '<span class="status-dot warning"></span>'
+                            "<strong>Needs citation review</strong><span>One or more factual sentences lack a valid source</span></div>",
                             unsafe_allow_html=True,
                         )
                     else:
