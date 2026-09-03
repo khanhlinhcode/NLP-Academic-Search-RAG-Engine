@@ -17,7 +17,6 @@ async def test_load_test_search_endpoint_success():
         warmup_requests=1,
         transport=transport,
     )
-
     assert report["mode"] == "fixed-count"
     assert report["request_count"] == 5
     assert report["warmup_requests"] == 1
