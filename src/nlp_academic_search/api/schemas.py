@@ -101,6 +101,8 @@ class AnswerMetadata(BaseModel):
     final_answer_replaced: bool = False
     verification_latency_ms: float = 0.0
     failure_reason: str | None = None
+    verification_provider_http_status: int | None = None
+    verification_provider_request_id: str | None = None
 
 
 class AskResponse(BaseModel):

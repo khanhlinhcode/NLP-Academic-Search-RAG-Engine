@@ -12,6 +12,7 @@ from streamlit.testing.v1 import AppTest
 
 from nlp_academic_search.api.main import create_app
 from nlp_academic_search.config import settings
+from nlp_academic_search.providers.verification.base import SemanticVerificationInvalidRequest
 from nlp_academic_search.rag.verification import SemanticValidation
 
 
@@ -142,6 +143,15 @@ class SemanticVerifier:
         return None
 
 
+class InvalidRequestSemanticVerifier(SemanticVerifier):
+    def verify(self, answer, sources, question):
+        del answer, sources, question
+        self.calls += 1
+        raise SemanticVerificationInvalidRequest(
+            "verification request rejected", provider_http_status=400
+        )
+
+
 def enable_verification(monkeypatch, *, fail_closed=True):
     monkeypatch.setattr(settings, "semantic_verification_enabled", True)
     monkeypatch.setattr(settings, "verification_provider", "groq")
@@ -240,6 +250,35 @@ def test_streamlit_warns_when_semantic_verification_is_unavailable(services, mon
     assert not app.exception
     assert any("Semantic verification unavailable" in item for item in rendered)
     assert not any("Answer ready" in item for item in rendered)
+
+
+@pytest.mark.integration
+def test_streamlit_never_marks_rejected_verifier_request_as_evidence_verified(
+    services, monkeypatch
+):
+    enable_verification(monkeypatch, fail_closed=True)
+    generator = ValidStreamGenerator()
+    verifier = InvalidRequestSemanticVerifier([False])
+    services.rag_generator = generator  # type: ignore[assignment]
+    services.semantic_verifier = verifier  # type: ignore[assignment]
+    monkeypatch.setattr(services, "ollama_available", lambda: True)
+
+    with _running_api(services) as port:
+        monkeypatch.setenv("API_BASE_URL", f"http://127.0.0.1:{port}")
+        app = AppTest.from_file(
+            Path(__file__).parents[2] / "scripts" / "streamlit_app.py", default_timeout=10
+        ).run()
+        app.radio[0].set_value("Ask").run()
+        app.text_area[0].input("How does attention replace recurrence?")
+        app.button[0].click().run(timeout=10)
+
+    rendered = [str(item.value) for item in app.markdown]
+    assert not app.exception
+    assert generator.calls == 1
+    assert verifier.calls == 1
+    assert any("Answer withheld" in item for item in rendered)
+    assert any("verifier request was rejected" in item.casefold() for item in rendered)
+    assert not any("Evidence verified" in item for item in rendered)
 
 
 @pytest.mark.integration

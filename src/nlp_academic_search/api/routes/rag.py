@@ -61,6 +61,8 @@ class SemanticCheck:
     attempted: bool
     latency_ms: float = 0.0
     error_category: str | None = None
+    provider_http_status: int | None = None
+    provider_request_id: str | None = None
 
 
 @dataclass(frozen=True)
@@ -78,6 +80,8 @@ class CitationOutcome:
     verification_latency_ms: float = 0.0
     final_answer_replaced: bool = False
     failure_reason: str | None = None
+    verification_provider_http_status: int | None = None
+    verification_provider_request_id: str | None = None
     warning: str | None = None
 
 
@@ -105,7 +109,9 @@ def _log_outcome(request: Request, outcome: CitationOutcome, source_count: int) 
                 ),
                 "repair_attempted": outcome.repair_attempted,
                 "verification_latency_ms": round(outcome.verification_latency_ms, 2),
-                "error_category": outcome.failure_reason,
+                "provider_http_status": outcome.verification_provider_http_status,
+                "provider_error_category": outcome.failure_reason,
+                "provider_request_id": outcome.verification_provider_request_id,
             }
         )
     )
@@ -132,7 +138,40 @@ def _verify(services: ServiceContainer, package: PromptPackage, answer: str) -> 
             True,
             (time.perf_counter() - started) * 1000,
             type(exc).__name__,
+            getattr(exc, "provider_http_status", None),
+            getattr(exc, "provider_request_id", None),
         )
+
+
+def _verification_warning(status: AnswerStatus, reason: str | None) -> str | None:
+    if status == "verification_unavailable":
+        return "Semantic verification is unavailable; the answer has structural checks only."
+    if status != "refused_unverified":
+        return None
+    messages = {
+        "SemanticVerificationInvalidRequest": (
+            "Answer withheld because the semantic verifier rejected its request contract."
+        ),
+        "SemanticVerificationInvalidResponse": (
+            "Answer withheld because the semantic verifier returned an invalid response."
+        ),
+        "SemanticVerificationAuthenticationError": (
+            "Answer withheld because semantic-verifier authentication failed."
+        ),
+        "SemanticVerificationRateLimited": (
+            "Answer withheld because the semantic verifier is rate-limited."
+        ),
+        "SemanticVerificationTimeout": ("Answer withheld because the semantic verifier timed out."),
+        "SemanticVerificationUnavailable": (
+            "Answer withheld because the semantic verifier is unavailable."
+        ),
+        "semantic_assessment_failed": (
+            "Answer withheld because one or more claims lacked verified evidence."
+        ),
+    }
+    if reason is not None and reason in messages:
+        return messages[reason]
+    return "Answer withheld because retrieved evidence could not verify every claim."
 
 
 def _status_for(
@@ -173,6 +212,7 @@ def _outcome(
     failure_reason: str | None = None,
 ) -> CitationOutcome:
     semantic_attempted = initial_semantic.attempted or final_semantic.attempted
+    provider_error = final_semantic if final_semantic.error_category else initial_semantic
     return CitationOutcome(
         answer=answer,
         validation=final_structural,
@@ -199,13 +239,9 @@ def _outcome(
         ),
         final_answer_replaced=answer != draft,
         failure_reason=failure_reason,
-        warning=(
-            "Semantic verification is unavailable; the answer has structural checks only."
-            if status == "verification_unavailable"
-            else "Answer withheld because retrieved evidence could not verify every claim."
-            if status == "refused_unverified"
-            else None
-        ),
+        verification_provider_http_status=provider_error.provider_http_status,
+        verification_provider_request_id=provider_error.provider_request_id,
+        warning=_verification_warning(status, failure_reason),
     )
 
 
@@ -275,7 +311,11 @@ def _validate_and_repair_sync(
             initial_semantic=initial_semantic,
             final_semantic=initial_semantic,
             repair_attempted=False,
-            reason="repair_disabled",
+            reason=(
+                "semantic_assessment_failed"
+                if initial_semantic.validation is not None
+                else "repair_disabled"
+            ),
         )
     if services.rag_generator is None:
         raise ModelUnavailableError("Generation provider is not configured")
@@ -325,7 +365,14 @@ def _validate_and_repair_sync(
         initial_semantic=initial_semantic,
         final_semantic=final_semantic,
         repair_attempted=True,
-        reason=final_semantic.error_category or "final_validation_failed",
+        reason=(
+            final_semantic.error_category
+            or (
+                "semantic_assessment_failed"
+                if final_semantic.validation is not None
+                else "final_validation_failed"
+            )
+        ),
     )
 
 
@@ -367,7 +414,11 @@ async def _validate_and_repair_async(
             initial_semantic=initial_semantic,
             final_semantic=initial_semantic,
             repair_attempted=False,
-            reason="repair_disabled",
+            reason=(
+                "semantic_assessment_failed"
+                if initial_semantic.validation is not None
+                else "repair_disabled"
+            ),
         )
     if services.rag_generator is None:
         raise ModelUnavailableError("Generation provider is not configured")
@@ -421,7 +472,14 @@ async def _validate_and_repair_async(
         initial_semantic=initial_semantic,
         final_semantic=final_semantic,
         repair_attempted=True,
-        reason=final_semantic.error_category or "final_validation_failed",
+        reason=(
+            final_semantic.error_category
+            or (
+                "semantic_assessment_failed"
+                if final_semantic.validation is not None
+                else "final_validation_failed"
+            )
+        ),
     )
 
 
@@ -492,6 +550,8 @@ def _metadata(
         final_answer_replaced=outcome.final_answer_replaced,
         verification_latency_ms=round(outcome.verification_latency_ms, 2),
         failure_reason=outcome.failure_reason,
+        verification_provider_http_status=outcome.verification_provider_http_status,
+        verification_provider_request_id=outcome.verification_provider_request_id,
     )
 
 

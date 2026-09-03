@@ -49,6 +49,12 @@ untrusted context, and stream provider output over SSE. Finalization has two ind
 2. semantic verification uses a strict structured response to map atomic claims to exact quotes,
    after which the server confirms every quote exists in the cited title or abstract.
 
+The Groq adapter derives a transport-only schema from the Pydantic response model. It keeps the
+strict structured-output shape (`type`, properties, required fields, closed objects, arrays,
+enums and references) while removing local annotations and validation constraints that the
+provider does not need. Provider output is still parsed by the original Pydantic model, so local
+length/range checks remain authoritative.
+
 Semantic verification does not establish truth outside the active corpus. Exact quote validation
 proves that the quoted text exists, not that the paper itself is correct. A verifier using the same
 model identifier as the generator is reported as non-independent.
@@ -68,6 +74,9 @@ reported complete before final validation.
   concurrency, a timeout and a small in-memory circuit breaker.
 - Production fail-closed readiness is degraded when semantic verification is configured as required
   but its provider is unavailable.
+- Verifier readiness uses the provider model-list endpoint. It means the configured model is
+  reachable, not that a completion has already passed the verifier contract; answer-level
+  "evidence verified" status is emitted only after a successful semantic assessment.
 - Runtime corpus, indexes, caches and reports are not package or Git artifacts.
 - Golden benchmark fixtures are version-controlled because they define evaluation inputs.
 

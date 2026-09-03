@@ -11,9 +11,28 @@ from nlp_academic_search.rag.verification import SemanticValidation
 class SemanticVerificationError(RuntimeError):
     """A verifier could not return a trustworthy structured assessment."""
 
+    def __init__(
+        self,
+        message: str,
+        *,
+        provider_http_status: int | None = None,
+        provider_request_id: str | None = None,
+    ) -> None:
+        super().__init__(message)
+        self.provider_http_status = provider_http_status
+        self.provider_request_id = provider_request_id
+
 
 class SemanticVerificationUnavailable(SemanticVerificationError):
     """The configured verifier or model is unavailable."""
+
+
+class SemanticVerificationInvalidRequest(SemanticVerificationError):
+    """The provider rejected the verifier request contract."""
+
+
+class SemanticVerificationAuthenticationError(SemanticVerificationUnavailable):
+    """The provider rejected the configured verifier credentials."""
 
 
 class SemanticVerificationInvalidResponse(SemanticVerificationError):
@@ -27,8 +46,19 @@ class SemanticVerificationTimeout(SemanticVerificationUnavailable):
 class SemanticVerificationRateLimited(SemanticVerificationUnavailable):
     """The verifier rejected the request due to quota or rate limits."""
 
-    def __init__(self, message: str, retry_after: float | None = None) -> None:
-        super().__init__(message)
+    def __init__(
+        self,
+        message: str,
+        retry_after: float | None = None,
+        *,
+        provider_http_status: int | None = None,
+        provider_request_id: str | None = None,
+    ) -> None:
+        super().__init__(
+            message,
+            provider_http_status=provider_http_status,
+            provider_request_id=provider_request_id,
+        )
         self.retry_after = retry_after
 
 

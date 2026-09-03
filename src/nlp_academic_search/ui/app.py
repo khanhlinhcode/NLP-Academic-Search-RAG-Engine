@@ -148,7 +148,7 @@ def render_pipeline(health: dict | None) -> None:
         (generation_ready, f"{generation_name} model available"),
     ]
     if verification_enabled:
-        checks.append((verification_ready, "Semantic verifier available"))
+        checks.append((verification_ready, "Semantic verifier model reachable"))
     for ok, label in checks:
         state = "Ready" if ok else "Check"
         color = "ready" if ok else "offline"
@@ -470,6 +470,37 @@ def render_saved_answer(entry: dict) -> None:
     st.markdown(entry.get("answer", ""))
 
 
+def verification_failure_detail(metadata: dict) -> str:
+    """Return actionable copy without exposing provider response details."""
+    reason = metadata.get("failure_reason")
+    if not isinstance(reason, str):
+        reason = None
+    details = {
+        "SemanticVerificationInvalidRequest": (
+            "The verifier request was rejected; check the backend verifier contract"
+        ),
+        "SemanticVerificationInvalidResponse": (
+            "The verifier returned an invalid structured response; check provider compatibility"
+        ),
+        "SemanticVerificationAuthenticationError": (
+            "Verifier authentication failed; check the backend provider credentials"
+        ),
+        "SemanticVerificationRateLimited": (
+            "The verifier is rate-limited; check provider quota and retry later"
+        ),
+        "SemanticVerificationTimeout": "The verifier timed out; retry the request later",
+        "SemanticVerificationUnavailable": (
+            "The verifier is temporarily unavailable; retry the request later"
+        ),
+        "semantic_assessment_failed": (
+            "One or more answer claims could not be supported by retrieved evidence"
+        ),
+    }
+    if reason is not None and reason in details:
+        return details[reason]
+    return "The generated draft could not be verified against the retrieved evidence"
+
+
 def render_citation_verdict(metadata: dict) -> None:
     citation = metadata.get("citation_validation") or {}
     if not citation:
@@ -483,7 +514,7 @@ def render_citation_verdict(metadata: dict) -> None:
         dot_class = "ready"
     elif status in {"refused_unverified", "refused_insufficient_context"}:
         label = "Answer withheld"
-        detail = "The generated draft could not be verified against the retrieved evidence"
+        detail = verification_failure_detail(metadata)
         css_class = "is-warning"
         dot_class = "warning"
     elif status == "verification_unavailable":
@@ -678,10 +709,11 @@ def render_ask(client: AcademicSearchClient, health: dict | None) -> None:
                             unsafe_allow_html=True,
                         )
                     elif status in {"refused_unverified", "refused_insufficient_context"}:
+                        detail = verification_failure_detail(metadata)
                         stage_slot.markdown(
                             '<div class="pipeline-state is-warning">'
                             '<span class="status-dot warning"></span>'
-                            "<strong>Answer withheld</strong><span>Evidence could not be verified</span></div>",
+                            f"<strong>Answer withheld</strong><span>{safe(detail)}</span></div>",
                             unsafe_allow_html=True,
                         )
                     elif not citation.get("valid", True):

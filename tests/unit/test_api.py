@@ -3,7 +3,10 @@ from fastapi.testclient import TestClient
 
 from nlp_academic_search.api.main import create_app
 from nlp_academic_search.config import settings
-from nlp_academic_search.providers.verification.base import SemanticVerificationTimeout
+from nlp_academic_search.providers.verification.base import (
+    SemanticVerificationInvalidRequest,
+    SemanticVerificationTimeout,
+)
 from nlp_academic_search.rag.generator import ModelUnavailableError
 from nlp_academic_search.rag.verification import SemanticValidation
 
@@ -100,6 +103,11 @@ class CountingValidGenerator(RepairingGenerator):
         self.sync_calls += 1
         return "Novelty rewards unseen results [1]."
 
+    async def generate_stream_async(self, messages, temperature=0.2):
+        del messages, temperature
+        self.async_calls += 1
+        yield "Novelty rewards unseen results [1]."
+
 
 class IncompleteRepairGenerator(RepairingGenerator):
     def generate(self, messages, temperature=0.2):
@@ -167,6 +175,17 @@ class TimeoutVerifier(SequencedVerifier):
 
     def is_available(self):
         return False
+
+
+class InvalidRequestVerifier(SequencedVerifier):
+    def verify(self, answer, sources, question):
+        del answer, sources, question
+        self.calls += 1
+        raise SemanticVerificationInvalidRequest(
+            "verification request rejected",
+            provider_http_status=400,
+            provider_request_id="groq-request-123",
+        )
 
 
 def enable_semantic_verification(monkeypatch, *, fail_closed=True):
@@ -279,11 +298,18 @@ def test_semantic_failure_repairs_once_then_becomes_verified(services, monkeypat
             json={"question": "How does the Transformer avoid recurrence?", "top_k": 1},
         )
 
+    assert response.status_code == 200
     payload = response.json()
     assert generator.sync_calls == 2
     assert verifier.calls == 2
     assert payload["metadata"]["answer_status"] == "verified"
+    assert payload["metadata"]["semantic_verification_attempted"] is True
+    assert payload["metadata"]["semantic_verification_succeeded"] is True
     assert payload["metadata"]["semantic_validation"]["valid"] is True
+    assert payload["metadata"]["semantic_validation"]["semantic_claim_coverage"] == 1.0
+    assert payload["metadata"]["semantic_validation"]["evidence_quote_validity"] == 1.0
+    assert payload["metadata"]["semantic_validation"]["unsupported_claim_count"] == 0
+    assert payload["metadata"]["failure_reason"] is None
     assert payload["metadata"]["initial_semantic_validation"]["valid"] is False
     assert payload["metadata"]["final_answer_replaced"] is True
     latencies = payload["metadata"]["latencies"]
@@ -334,6 +360,62 @@ def test_verifier_timeout_fails_closed_without_wasting_repair(services, monkeypa
     assert metadata["semantic_verification_attempted"] is True
     assert metadata["semantic_verification_succeeded"] is False
     assert metadata["failure_reason"] == "SemanticVerificationTimeout"
+
+
+def test_verifier_invalid_request_is_non_retryable_and_observable(services, monkeypatch, caplog):
+    enable_semantic_verification(monkeypatch)
+    monkeypatch.setattr(settings, "backend_api_token", "backend-secret")
+    generator = CountingValidGenerator()
+    verifier = InvalidRequestVerifier([False])
+    services.rag_generator = generator  # type: ignore[assignment]
+    services.semantic_verifier = verifier  # type: ignore[assignment]
+
+    with caplog.at_level("INFO", logger="academic_search.rag"):
+        with TestClient(create_app(services)) as client:
+            response = client.post(
+                "/api/v1/ask",
+                json={"question": "How does attention replace recurrence?", "top_k": 1},
+                headers={"Authorization": "Bearer backend-secret"},
+            )
+
+    metadata = response.json()["metadata"]
+    assert generator.sync_calls == 1
+    assert verifier.calls == 1
+    assert metadata["answer_status"] == "refused_unverified"
+    assert metadata["semantic_verification_succeeded"] is False
+    assert metadata["citation_repair_attempted"] is False
+    assert metadata["failure_reason"] == "SemanticVerificationInvalidRequest"
+    assert metadata["verification_provider_http_status"] == 400
+    assert metadata["verification_provider_request_id"] == "groq-request-123"
+    logs = caplog.text
+    assert '"provider_http_status": 400' in logs
+    assert '"provider_error_category": "SemanticVerificationInvalidRequest"' in logs
+    assert "backend-secret" not in logs
+
+
+def test_verifier_invalid_request_streams_final_refusal_metadata_without_repair(
+    services, monkeypatch
+):
+    enable_semantic_verification(monkeypatch)
+    generator = CountingValidGenerator()
+    verifier = InvalidRequestVerifier([False])
+    services.rag_generator = generator  # type: ignore[assignment]
+    services.semantic_verifier = verifier  # type: ignore[assignment]
+
+    with TestClient(create_app(services)) as client:
+        response = client.post(
+            "/api/v1/ask/stream",
+            json={"question": "How does attention replace recurrence?", "top_k": 1},
+        )
+
+    body = response.text
+    assert generator.async_calls == 1
+    assert verifier.calls == 1
+    assert "event: answer_replacement" in body
+    assert "event: citation_repair" not in body
+    assert '"failure_reason": "SemanticVerificationInvalidRequest"' in body
+    assert '"citation_repair_attempted": false' in body
+    assert body.index("event: answer_replacement") < body.index("event: done")
 
 
 def test_semantic_sse_order_replaces_draft_before_final_done(services, monkeypatch):

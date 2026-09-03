@@ -30,6 +30,7 @@ Threat mitigation status is categorized into:
 | **TM-12** | **Container Privilege Escalation** | Container runs as root user inside Docker host. | Dockerfile creates system user `app:app` and executes entrypoint under non-root USER. | **Verified Mitigation** | `test_11_container_runs_non_root` |
 | **TM-13** | **Unsupported Semantic Claim** | A response uses a syntactically valid citation whose paper does not support the claim, or a verifier fabricates an evidence quote. | A provider-neutral semantic verifier returns strict typed claim assessments. The server independently checks exact normalized quotes against the cited title or abstract, permits one repair pass and can fail closed. Same-model verification is marked non-independent. | **Verified Mitigation** | Semantic verifier, provider taxonomy, repair and golden-fixture unit tests. |
 | **TM-14** | **Unauthenticated Network Access** | A network user calls search or ask endpoints without authorization. | When configured, constant-time Bearer-token middleware protects non-public routes; bounded per-subject in-memory rate limits reduce simple abuse. Production cloud configuration requires a backend token. | **Verified Mitigation** | Authentication, CORS and rate-limit API/security tests. |
+| **TM-15** | **Verifier Contract Rejection** | A structured-output provider rejects unsupported schema annotations and no semantic assessment is produced. | The provider adapter sends a strict, allow-listed transport schema while retaining full local Pydantic validation. HTTP 400 is classified as a non-retryable invalid request, logged without response content, and fails closed without answer repair. | **Verified Mitigation** | Groq schema, HTTP taxonomy, API fail-closed and UI tests. |
 
 ---
 
@@ -41,6 +42,9 @@ Threat mitigation status is categorized into:
 - **Verification Deadline and Circuit Breaker**: Remote semantic verification uses a configured
   timeout and a bounded in-memory failure circuit; production fail-closed readiness degrades when
   required verification is unavailable.
+- **Safe Provider Diagnostics**: Verification logs contain only provider/model identifiers, status,
+  error category, provider request ID and latency. They exclude credentials, prompts, answers,
+  evidence text and raw provider response bodies.
 
 ## 4. Residual verification risk
 

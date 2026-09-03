@@ -7,10 +7,13 @@ from pathlib import Path
 
 import httpx
 import pytest
+from pydantic import ValidationError
 
 from nlp_academic_search.config import GroqConfig, VerificationConfig
 from nlp_academic_search.data.loader import Paper
 from nlp_academic_search.providers.verification.base import (
+    SemanticVerificationAuthenticationError,
+    SemanticVerificationInvalidRequest,
     SemanticVerificationInvalidResponse,
     SemanticVerificationRateLimited,
     SemanticVerificationTimeout,
@@ -21,6 +24,7 @@ from nlp_academic_search.rag.citations import is_refusal, validate_citations
 from nlp_academic_search.rag.verification import (
     ClaimAssessment,
     EvidenceSpan,
+    VerifierResponse,
     validate_semantic_assessment,
 )
 
@@ -212,6 +216,17 @@ def supported_payload(answer: str) -> dict:
     }
 
 
+def object_schemas(value):
+    if isinstance(value, dict):
+        if value.get("type") == "object":
+            yield value
+        for child in value.values():
+            yield from object_schemas(child)
+    elif isinstance(value, list):
+        for child in value:
+            yield from object_schemas(child)
+
+
 def test_groq_uses_strict_json_schema_and_parses_with_pydantic(sample_papers: list[Paper]) -> None:
     answer = "Passage retrieval works via bi-encoders [1]."
 
@@ -225,6 +240,22 @@ def test_groq_uses_strict_json_schema_and_parses_with_pydantic(sample_papers: li
         assert schema["additionalProperties"] is False
         assert schema["$defs"]["ClaimAssessment"]["additionalProperties"] is False
         assert schema["$defs"]["EvidenceSpan"]["additionalProperties"] is False
+        serialized_schema = json.dumps(schema)
+        for unsupported in (
+            "minLength",
+            "maxLength",
+            "minimum",
+            "maximum",
+            "title",
+            "description",
+            "default",
+            "examples",
+        ):
+            assert f'"{unsupported}"' not in serialized_schema
+        for object_schema in object_schemas(schema):
+            assert object_schema["additionalProperties"] is False
+            assert set(object_schema["properties"]) == set(object_schema["required"])
+        assert "$ref" in serialized_schema
         assert "sensitive-test-token" not in json.dumps(body)
         assert "never chain-of-thought" in body["messages"][0]["content"]
         return httpx.Response(200, json=supported_payload(answer))
@@ -236,6 +267,23 @@ def test_groq_uses_strict_json_schema_and_parses_with_pydantic(sample_papers: li
     result = provider.verify(answer, sample_papers, "How does retrieval work?")
     assert result.valid is True
     assert provider.verifier_independent is True
+
+
+def test_transport_schema_does_not_weaken_pydantic_response_limits() -> None:
+    oversized = {
+        "claims": [
+            {
+                "claim_text": "x" * 6001,
+                "factual": True,
+                "cited_indices": [1],
+                "verdict": "supported",
+                "evidence": [{"source_index": 0, "quote": "Supported quote."}],
+                "explanation": "Supported.",
+            }
+        ]
+    }
+    with pytest.raises(ValidationError):
+        VerifierResponse.model_validate(oversized)
 
 
 def test_groq_rejects_invalid_schema(sample_papers: list[Paper]) -> None:
@@ -277,8 +325,9 @@ def test_source_prompt_injection_remains_untrusted_verifier_data() -> None:
 @pytest.mark.parametrize(
     ("response", "expected"),
     [
-        (httpx.Response(401), SemanticVerificationUnavailable),
-        (httpx.Response(403), SemanticVerificationUnavailable),
+        (httpx.Response(400), SemanticVerificationInvalidRequest),
+        (httpx.Response(401), SemanticVerificationAuthenticationError),
+        (httpx.Response(403), SemanticVerificationAuthenticationError),
         (httpx.Response(429, headers={"retry-after": "2"}), SemanticVerificationRateLimited),
         (httpx.Response(503), SemanticVerificationUnavailable),
     ],
@@ -293,6 +342,24 @@ def test_groq_maps_http_failures_without_exposing_credentials(
     provider = GroqSemanticVerificationProvider(groq_config(), verifier_config(), client=client)
     with pytest.raises(expected) as raised:
         provider.verify("A factual answer [1].", sample_papers, "Question?")
+    assert "sensitive-test-token" not in str(raised.value)
+
+
+def test_groq_400_preserves_only_safe_provider_metadata(sample_papers: list[Paper]) -> None:
+    response = httpx.Response(
+        400,
+        headers={"x-request-id": "groq-request-123"},
+        json={"error": {"message": "request contains sensitive-test-token"}},
+    )
+    client = httpx.Client(
+        base_url="https://api.groq.test/openai/v1",
+        transport=httpx.MockTransport(lambda _: response),
+    )
+    provider = GroqSemanticVerificationProvider(groq_config(), verifier_config(), client=client)
+    with pytest.raises(SemanticVerificationInvalidRequest) as raised:
+        provider.verify("A factual answer [1].", sample_papers, "Question?")
+    assert raised.value.provider_http_status == 400
+    assert raised.value.provider_request_id == "groq-request-123"
     assert "sensitive-test-token" not in str(raised.value)
 
 
