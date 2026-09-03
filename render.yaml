@@ -7,3 +7,14 @@ services:
     envVars:
       - key: PORT
         value: 8000
+      - key: OMP_NUM_THREADS
+        value: 1
+      - key: MKL_NUM_THREADS
+        value: 1
+      - key: OPENBLAS_NUM_THREADS
+        value: 1
+      - key: TORCH_NUM_THREADS
+        value: 1
+      - key: WEB_CONCURRENCY
+        value: 1
+

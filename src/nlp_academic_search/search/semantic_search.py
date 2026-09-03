@@ -10,8 +10,6 @@ from typing import Any
 
 import faiss
 import numpy as np
-import torch
-from sentence_transformers import SentenceTransformer
 
 from nlp_academic_search.config import settings
 from nlp_academic_search.data.loader import Paper, active_corpus_path
@@ -54,17 +52,8 @@ class SemanticSearcher:
             raw_revision.strip() if raw_revision and raw_revision.strip() else None
         )
         # Flat-IP search with one query does not benefit from a large OpenMP pool.
-        # Keeping both native runtimes small prevents libomp crashes on macOS arm64.
         faiss.omp_set_num_threads(settings.embedding.native_threads)
-        torch.set_num_threads(settings.embedding.native_threads)
-        self.model = model or SentenceTransformer(
-            self.model_name,
-            revision=self.model_revision,
-            device=settings.embedding.device,
-        )
-        # Torch and FAISS both use native OpenMP runtimes. Serializing the complete
-        # dense inference section prevents process-level crashes when they overlap,
-        # especially on macOS arm64. RLock keeps helper calls composable.
+        self._model = model
         self._inference_lock = threading.RLock()
         self.corpus_path = corpus_path or active_corpus_path()
         self.index_dir = index_dir or active_index_dir(settings.data.embeddings_dir)
@@ -82,6 +71,37 @@ class SemanticSearcher:
                 dimension=int(self.embeddings.shape[1]),
                 index=self.index,
             )
+
+    @property
+    def model(self) -> Any:
+        if self._model is None:
+            with self._inference_lock:
+                if self._model is None:
+                    import torch
+                    from sentence_transformers import SentenceTransformer
+
+                    torch.set_num_threads(settings.embedding.native_threads)
+                    torch.set_grad_enabled(False)
+                    self._model = SentenceTransformer(
+                        self.model_name,
+                        revision=self.model_revision,
+                        device=settings.embedding.device,
+                    )
+                    dimension_getter = getattr(self._model, "get_embedding_dimension", None)
+                    model_dimension = (
+                        dimension_getter()
+                        if dimension_getter is not None
+                        else self._model.get_sentence_embedding_dimension()
+                    )
+                    if (
+                        hasattr(self, "manifest")
+                        and model_dimension
+                        and model_dimension != self.manifest.embedding_dimension
+                    ):
+                        raise IndexCompatibilityError(
+                            "Configured model output dimension differs from index manifest"
+                        )
+        return self._model
 
     def _load_existing(self) -> tuple[np.ndarray, faiss.Index, IndexManifest]:
         embeddings_path = self.index_dir / "paper_embeddings.npy"
@@ -105,16 +125,6 @@ class SemanticSearcher:
             embeddings=embeddings,
             index=index,
         )
-        dimension_getter = getattr(self.model, "get_embedding_dimension", None)
-        model_dimension = (
-            dimension_getter()
-            if dimension_getter is not None
-            else self.model.get_sentence_embedding_dimension()
-        )
-        if model_dimension and model_dimension != manifest.embedding_dimension:
-            raise IndexCompatibilityError(
-                "Configured model output dimension differs from index manifest"
-            )
         return embeddings, index, manifest
 
     def _compute_embeddings(self) -> np.ndarray:
