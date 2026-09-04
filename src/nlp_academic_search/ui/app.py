@@ -275,7 +275,7 @@ def render_search(client: AcademicSearchClient, health: dict | None) -> None:
         st.session_state.selected_paper = results[0] if results else None
 
     with st.form("search-form", border=False):
-        query_col, action_col = st.columns([5, 1.15])
+        query_col, action_col = st.columns([5, 1.15], vertical_alignment="bottom")
         with query_col:
             query = st.text_input(
                 "Query",
@@ -284,11 +284,10 @@ def render_search(client: AcademicSearchClient, health: dict | None) -> None:
                 max_chars=500,
             )
         with action_col:
-            st.write("")
             submitted = st.form_submit_button(
                 "Search papers", type="primary", use_container_width=True
             )
-        setting_a, setting_b, setting_c = st.columns([2.1, 1.5, 4.4])
+        setting_a, setting_b, setting_c = st.columns([2.1, 1.5, 4.4], vertical_alignment="bottom")
         with setting_a:
             method = st.selectbox(
                 "Method",
@@ -587,9 +586,9 @@ def render_ask(client: AcademicSearchClient, health: dict | None) -> None:
             height=92,
             max_chars=1000,
         )
-        controls, action = st.columns([4, 1])
+        controls, action = st.columns([4, 1], vertical_alignment="bottom")
         with controls:
-            top_k_col, reranker_col = st.columns([1, 2])
+            top_k_col, reranker_col = st.columns([1, 2], vertical_alignment="bottom")
             with top_k_col:
                 top_k = st.selectbox("Evidence papers", options=[3, 5, 8, 10, 15, 20], index=1)
             with reranker_col:
@@ -600,7 +599,6 @@ def render_ask(client: AcademicSearchClient, health: dict | None) -> None:
                     help="Disabled by default until a leakage-free benchmark demonstrates a gain.",
                 )
         with action:
-            st.write("")
             submitted = st.form_submit_button(
                 "Ask", type="primary", use_container_width=True, disabled=not rag_ready
             )

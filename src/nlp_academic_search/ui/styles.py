@@ -176,13 +176,44 @@ def stylesheet() -> str:
     [data-testid="stButton"] button,
     [data-testid="stLinkButton"] a,
     [data-testid="stFormSubmitButton"] button {
-        min-height: 2.75rem !important;
+        display: inline-flex !important;
+        align-items: center !important;
+        justify-content: center !important;
+        min-height: 44px !important;
+        padding: 0.65rem 1rem !important;
         border: 1px solid var(--rule-strong) !important;
         border-radius: var(--radius-control) !important;
         background: transparent !important;
         color: var(--ink) !important;
         font: 600 0.87rem/1 var(--font-body) !important;
+        text-align: center !important;
         transition: border-color 140ms ease, color 140ms ease, background-color 140ms ease !important;
+    }
+
+    .stButton > button [data-testid="stMarkdownContainer"],
+    [data-testid="stButton"] button [data-testid="stMarkdownContainer"],
+    [data-testid="stLinkButton"] a [data-testid="stMarkdownContainer"],
+    [data-testid="stFormSubmitButton"] button [data-testid="stMarkdownContainer"] {
+        display: flex !important;
+        align-items: center !important;
+        justify-content: center !important;
+        width: 100%;
+        min-width: 0;
+        text-align: center !important;
+    }
+
+    .stButton > button [data-testid="stMarkdownContainer"] p,
+    [data-testid="stButton"] button [data-testid="stMarkdownContainer"] p,
+    [data-testid="stLinkButton"] a [data-testid="stMarkdownContainer"] p,
+    [data-testid="stFormSubmitButton"] button [data-testid="stMarkdownContainer"] p {
+        display: flex !important;
+        align-items: center !important;
+        justify-content: center !important;
+        width: 100%;
+        margin: 0 !important;
+        color: inherit !important;
+        line-height: 1.25 !important;
+        text-align: center !important;
     }
 
     .stButton > button:hover,
@@ -325,19 +356,23 @@ def stylesheet() -> str:
     }
 
     [data-testid="stRadioGroup"] [data-testid="stRadioOption"] {
-        flex: 1;
+        display: flex !important;
+        align-items: center !important;
+        justify-content: center !important;
+        flex: 1 1 0;
         min-width: 0;
-        min-height: 2.45rem;
-        justify-content: center;
+        min-height: 44px;
         margin: 0;
         padding: 0.52rem 1rem;
         border: 1px solid transparent !important;
         border-radius: 7px !important;
+        box-sizing: border-box;
         background: transparent !important;
         color: var(--ink-secondary) !important;
         font-family: var(--font-body) !important;
         font-size: 0.92rem !important;
         font-weight: 600 !important;
+        text-align: center !important;
         white-space: nowrap;
         cursor: pointer;
     }
@@ -354,16 +389,44 @@ def stylesheet() -> str:
     }
 
     [data-testid="stRadioGroup"] [data-testid="stRadioOption"] p {
-        margin: 0;
+        display: flex !important;
+        align-items: center !important;
+        justify-content: center !important;
+        width: 100%;
+        margin: 0 !important;
         color: inherit !important;
-        line-height: 1.2;
+        line-height: 1.25 !important;
+        text-align: center !important;
     }
 
     [data-testid="stRadioOption"] > div > div:first-child > div:first-child {
         display: none !important;
     }
 
-    [data-testid="stRadioOption"] > div > div:first-child { gap: 0 !important; }
+    [data-testid="stRadioOption"] > div {
+        display: flex !important;
+        align-items: center !important;
+        justify-content: center !important;
+        width: 100%;
+        min-width: 0;
+    }
+
+    [data-testid="stRadioOption"] > div > div:first-child {
+        display: flex !important;
+        align-items: center !important;
+        justify-content: center !important;
+        width: 100%;
+        gap: 0 !important;
+    }
+
+    [data-testid="stRadioOption"] [data-testid="stMarkdownContainer"] {
+        display: flex !important;
+        align-items: center !important;
+        justify-content: center !important;
+        width: 100%;
+        min-width: 0;
+        text-align: center !important;
+    }
 
     /* Search and Ask instruments */
     [data-testid="stForm"] {
@@ -795,7 +858,7 @@ def stylesheet() -> str:
         .stButton > button,
         [data-testid="stButton"] button,
         [data-testid="stLinkButton"] a,
-        [data-testid="stFormSubmitButton"] button { min-height: 2.75rem !important; }
+        [data-testid="stFormSubmitButton"] button { min-height: 44px !important; }
     }
 
     @media (max-width: 420px) {

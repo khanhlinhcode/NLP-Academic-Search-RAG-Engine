@@ -62,11 +62,14 @@ def test_streamlit_reinjects_theme_once_across_mode_switches(services, monkeypat
         ).run()
         assert _theme_block_count(app) == 1
         assert sum(widget.label == "Query" for widget in app.text_input) == 1
+        assert app.radio[0].options == ["Search", "Ask"]
+        assert any(button.label == "Search papers" for button in app.button)
         assert sum(expander.label == "How this search works" for expander in app.expander) == 1
 
         app.radio[0].set_value("Ask").run()
         assert _theme_block_count(app) == 1
         assert len(app.text_area) == 1
+        assert any(button.label == "Ask" for button in app.button)
         assert (
             sum(expander.label == "How this answer is produced" for expander in app.expander) == 1
         )
@@ -74,6 +77,7 @@ def test_streamlit_reinjects_theme_once_across_mode_switches(services, monkeypat
         app.radio[0].set_value("Search").run()
         assert _theme_block_count(app) == 1
         assert sum(widget.label == "Query" for widget in app.text_input) == 1
+        assert any(button.label == "Search papers" for button in app.button)
 
         app.radio[0].set_value("Ask").run()
 
@@ -81,6 +85,7 @@ def test_streamlit_reinjects_theme_once_across_mode_switches(services, monkeypat
     assert not app.exception
     assert _theme_block_count(app) == 1
     assert len(app.text_area) == 1
+    assert any(button.label == "Ask" for button in app.button)
     assert sum('class="masthead"' in item for item in rendered) == 1
     assert app.session_state["ask_history"] == []
 

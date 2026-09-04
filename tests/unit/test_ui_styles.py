@@ -70,6 +70,48 @@ def test_mode_switch_and_form_controls_use_soft_bounded_surfaces():
     assert '[data-testid="stFormSubmitButton"] button p' in css
 
 
+def test_buttons_center_their_markdown_content_without_layout_offsets():
+    css = stylesheet()
+    button_rules = css.split('[data-testid="stTextInput"] input', maxsplit=1)[1].split(
+        '[data-testid="stToggle"]', maxsplit=1
+    )[0]
+
+    assert "display: inline-flex !important;" in button_rules
+    assert "align-items: center !important;" in button_rules
+    assert "justify-content: center !important;" in button_rules
+    assert "min-height: 44px !important;" in button_rules
+    assert "text-align: center !important;" in button_rules
+    assert 'button [data-testid="stMarkdownContainer"] p' in button_rules
+    assert "margin: 0 !important;" in button_rules
+    assert "line-height: 1.25 !important;" in button_rules
+
+
+def test_mode_options_are_equal_accessible_centered_touch_targets():
+    css = stylesheet()
+    mode_rules = css.split("/* Editorial mode navigation */", maxsplit=1)[1].split(
+        "/* Search and Ask instruments */", maxsplit=1
+    )[0]
+
+    assert "display: flex !important;" in mode_rules
+    assert "align-items: center !important;" in mode_rules
+    assert "justify-content: center !important;" in mode_rules
+    assert "flex: 1 1 0;" in mode_rules
+    assert "min-height: 44px;" in mode_rules
+    assert "margin: 0 !important;" in mode_rules
+    assert "border-bottom" not in mode_rules
+    assert '[data-testid="stRadioOption"] input {' not in mode_rules
+
+
+def test_form_columns_use_structural_bottom_alignment_without_blank_spacers():
+    app_path = Path(__file__).parents[2] / "src" / "nlp_academic_search" / "ui" / "app.py"
+    app_source = app_path.read_text(encoding="utf-8")
+
+    assert 'st.columns([5, 1.15], vertical_alignment="bottom")' in app_source
+    assert 'st.columns([4, 1], vertical_alignment="bottom")' in app_source
+    assert 'st.columns([1, 2], vertical_alignment="bottom")' in app_source
+    assert 'st.write("")' not in app_source
+
+
 def test_streamlit_native_theme_is_a_warm_light_fallback():
     config_path = Path(__file__).parents[2] / ".streamlit" / "config.toml"
     with config_path.open("rb") as config_file:
