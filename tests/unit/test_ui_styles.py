@@ -126,11 +126,21 @@ def test_evidence_rows_wrap_titles_and_preserve_text_separators():
     assert "gap: 0.3rem 0.55rem;" in source_rules
     assert "flex: 1 1 12rem;" in source_rules
     assert "white-space: nowrap;" in source_rules
-    assert 'class="source-title-row"' in app_source
+    assert '<span class="source-title-row">' in app_source
+    assert '<div class="source-title-row">' not in app_source
     assert 'class="cited-label" aria-label="Cited source"' in app_source
     assert 'class="cited-separator" aria-hidden="true"> · </span>' in app_source
     assert "[{safe(source_index)}]&ensp;" in app_source
     assert '<span class="status-dot ready"></span> Cited' not in app_source
+
+
+def test_ask_failure_copy_distinguishes_repair_failures():
+    app_path = Path(__file__).parents[2] / "src" / "nlp_academic_search" / "ui" / "app.py"
+    app_source = app_path.read_text(encoding="utf-8")
+
+    assert '"repair_disabled":' in app_source
+    assert '"repair_provider_error":' in app_source
+    assert '"final_validation_failed":' in app_source
 
 
 def test_streamlit_native_theme_is_a_warm_light_fallback():

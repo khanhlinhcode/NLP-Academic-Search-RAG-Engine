@@ -316,7 +316,8 @@ def test_streamlit_marks_only_semantic_valid_answer_as_evidence_verified(service
     assert generator.calls == 1
     assert verifier.calls == 1
     assert any("Answer ready" in item and "Evidence verified" in item for item in rendered)
-    assert any('class="source-title-row"' in item for item in rendered)
+    assert any('<span class="source-title-row">' in item for item in rendered)
+    assert not any('<div class="source-title-row">' in item for item in rendered)
     assert any('class="cited-separator"' in item and " · " in item for item in rendered)
     assert not any("Running" in item for item in rendered)
     assert not any("Waiting for evidence" in item for item in rendered)

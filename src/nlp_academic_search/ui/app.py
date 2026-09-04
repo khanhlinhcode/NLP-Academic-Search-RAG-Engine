@@ -477,10 +477,10 @@ def render_sources(sources: list, metadata: dict | None = None) -> None:
             <div class="source-item {"is-cited" if cited else ""}">
               <div class="source-heading">
                 <span class="source-index">[{safe(source_index)}]&ensp;</span>
-                <div class="source-title-row">
+                <span class="source-title-row">
                   <span class="source-title">{safe(source.get("title"))}</span>
                   {cited_badge}
-                </div>
+                </span>
               </div>
               <div class="source-meta">
                 {safe(authors_text(source.get("authors", []), limit=3))}<br>
@@ -529,6 +529,9 @@ def verification_failure_detail(metadata: dict) -> str:
         "semantic_assessment_failed": (
             "One or more answer claims could not be supported by retrieved evidence"
         ),
+        "repair_disabled": "Answer repair is disabled in the backend configuration",
+        "repair_provider_error": "The generation provider could not complete answer repair",
+        "final_validation_failed": ("The repaired answer still did not pass evidence validation"),
     }
     if reason is not None and reason in details:
         return details[reason]
