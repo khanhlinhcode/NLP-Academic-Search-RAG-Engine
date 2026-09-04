@@ -46,7 +46,7 @@ def test_ask_response_has_grounding_metadata(services, monkeypatch):
         )
         assert response.status_code == 200
         payload = response.json()
-        assert payload["metadata"]["prompt_version"] == "academic-grounding-v3"
+        assert payload["metadata"]["prompt_version"] == "academic-grounding-v4"
         assert payload["metadata"]["citation_validation"]["valid"] is True
         assert payload["metadata"]["citation_repair_attempted"] is False
         assert payload["sources"][0]["source_url"].startswith("https://arxiv.org/")

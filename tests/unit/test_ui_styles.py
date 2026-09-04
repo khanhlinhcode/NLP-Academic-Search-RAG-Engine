@@ -112,6 +112,27 @@ def test_form_columns_use_structural_bottom_alignment_without_blank_spacers():
     assert 'st.write("")' not in app_source
 
 
+def test_evidence_rows_wrap_titles_and_preserve_text_separators():
+    css = stylesheet()
+    app_path = Path(__file__).parents[2] / "src" / "nlp_academic_search" / "ui" / "app.py"
+    app_source = app_path.read_text(encoding="utf-8")
+
+    source_rules = css.split(".source-heading {", maxsplit=1)[1].split(
+        ".citation-badge {", maxsplit=1
+    )[0]
+    assert "grid-template-columns: 2rem minmax(0, 1fr);" in source_rules
+    assert ".source-title-row {" in source_rules
+    assert "flex-wrap: wrap;" in source_rules
+    assert "gap: 0.3rem 0.55rem;" in source_rules
+    assert "flex: 1 1 12rem;" in source_rules
+    assert "white-space: nowrap;" in source_rules
+    assert 'class="source-title-row"' in app_source
+    assert 'class="cited-label" aria-label="Cited source"' in app_source
+    assert 'class="cited-separator" aria-hidden="true"> · </span>' in app_source
+    assert "[{safe(source_index)}]&ensp;" in app_source
+    assert '<span class="status-dot ready"></span> Cited' not in app_source
+
+
 def test_streamlit_native_theme_is_a_warm_light_fallback():
     config_path = Path(__file__).parents[2] / ".streamlit" / "config.toml"
     with config_path.open("rb") as config_file:

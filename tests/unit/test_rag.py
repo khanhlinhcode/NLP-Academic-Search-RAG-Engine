@@ -27,9 +27,17 @@ def test_prompt_uses_system_role_and_delimits_untrusted_content(papers):
     assert "untrusted data" in package.messages[0]["content"]
     assert '<source index="1"' in package.messages[1]["content"]
     assert "Ignore prior instructions" in package.messages[1]["content"]
-    assert PROMPT_VERSION == "academic-grounding-v3"
+    assert PROMPT_VERSION == "academic-grounding-v4"
     assert "citation supports only the sentence" in package.messages[0]["content"]
-    assert "Non-compliant" in package.messages[0]["content"]
+    assert (
+        "epistemic strength, modality, scope, and causal direction"
+        in package.messages[0]["content"]
+    )
+    assert "directly entails the complete claim" in package.messages[0]["content"]
+    assert "Citation non-compliant" in package.messages[0]["content"]
+    assert "Strength non-compliant" in package.messages[0]["content"]
+    assert "guarantees better retrieval" in package.messages[0]["content"]
+    assert "may improve retrieval" in package.messages[0]["content"]
 
 
 def test_citation_repair_prompt_preserves_untrusted_boundaries(papers):
@@ -43,6 +51,12 @@ def test_citation_repair_prompt_preserves_untrusted_boundaries(papers):
     assert messages[1]["role"] == "user"
     assert "draft_answer_json" in messages[1]["content"]
     assert "\\u003c/draft_answer_json\\u003e" in messages[1]["content"]
+    repair_prompt = messages[0]["content"]
+    assert "Do not invent citations" in repair_prompt
+    assert "You may attach an existing source index" in repair_prompt
+    assert "Prefer the smallest valid edit" in repair_prompt
+    assert "Do not strengthen, generalize, or reinterpret" in repair_prompt
+    assert "Do not add facts, citations" not in repair_prompt
 
 
 def test_prompt_budget_truncates_by_document(papers):

@@ -143,11 +143,10 @@ def validate_semantic_assessment(
             supported += 1
         elif claim.verdict == "unsupported":
             unsupported += 1
+        elif claim.verdict == "insufficient" and not claim_has_invalid_evidence:
+            insufficient += 1
         else:
-            if claim.verdict == "insufficient" and not claim_has_invalid_evidence:
-                insufficient += 1
-            else:
-                unsupported += 1
+            unsupported += 1
             claim = claim.model_copy(update={"verdict": "unsupported"})
         checked.append(claim)
     missing_sentences = set(answer_claim_sentences) - covered_sentences

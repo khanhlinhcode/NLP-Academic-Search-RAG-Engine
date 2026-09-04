@@ -49,6 +49,11 @@ untrusted context, and stream provider output over SSE. Finalization has two ind
 2. semantic verification uses a strict structured response to map atomic claims to exact quotes,
    after which the server confirms every quote exists in the cited title or abstract.
 
+Generation and verification preserve the evidence's certainty, scope, comparison and causal
+direction. A plausible claim that requires an unstated inference, or is stronger than its cited
+excerpt, is insufficient rather than supported. Exact quote existence is necessary evidence
+provenance but is not itself proof of entailment.
+
 The Groq adapter derives a transport-only schema from the Pydantic response model. It keeps the
 strict structured-output shape (`type`, properties, required fields, closed objects, arrays,
 enums and references) while removing local annotations and validation constraints that the

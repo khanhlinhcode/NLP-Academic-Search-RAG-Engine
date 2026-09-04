@@ -95,6 +95,41 @@ def test_structurally_cited_but_semantically_unsupported_is_invalid(
     assert result.unsupported_claim_count == 1
 
 
+def test_exact_quote_does_not_make_epistemic_overclaim_supported() -> None:
+    paper = Paper(
+        id="evaluation",
+        title="Retrieval evaluation",
+        abstract=(
+            "Precision and recall have long been used to evaluate retrieval systems. "
+            "Retrieving novel relevant documents is valuable."
+        ),
+    )
+    answer = "Precision and recall are proven insufficient [1]."
+    result = validate(
+        answer,
+        [paper],
+        [
+            claim(
+                answer,
+                cited=[1],
+                verdict="insufficient",
+                evidence=[
+                    EvidenceSpan(
+                        source_index=0,
+                        quote="Precision and recall have long been used",
+                    )
+                ],
+            )
+        ],
+    )
+
+    assert result.valid is False
+    assert result.insufficient_claim_count == 1
+    assert result.supported_claim_count == 0
+    assert result.evidence_quote_validity == 1.0
+    assert result.claims[0].verdict == "insufficient"
+
+
 def test_fabricated_quote_is_rejected_and_claim_becomes_unsupported(
     sample_papers: list[Paper],
 ) -> None:
@@ -257,7 +292,12 @@ def test_groq_uses_strict_json_schema_and_parses_with_pydantic(sample_papers: li
             assert set(object_schema["properties"]) == set(object_schema["required"])
         assert "$ref" in serialized_schema
         assert "sensitive-test-token" not in json.dumps(body)
-        assert "never chain-of-thought" in body["messages"][0]["content"]
+        verifier_prompt = body["messages"][0]["content"]
+        assert "never chain-of-thought" in verifier_prompt
+        assert "directly entails the complete claim" in verifier_prompt
+        assert "Use insufficient when a claim is plausible" in verifier_prompt
+        assert "exact quote proves only that the text exists" in verifier_prompt
+        assert "same certainty, scope, comparison, and causal direction" in verifier_prompt
         return httpx.Response(200, json=supported_payload(answer))
 
     client = httpx.Client(
@@ -429,7 +469,7 @@ def test_semantic_verification_golden_fixture() -> None:
         / "semantic_verification_golden.json"
     )
     fixture = json.loads(fixture_path.read_text(encoding="utf-8"))
-    assert len(fixture["cases"]) == 10
+    assert len(fixture["cases"]) == 12
 
     for case in fixture["cases"]:
         papers = [Paper(**source) for source in case["sources"]]

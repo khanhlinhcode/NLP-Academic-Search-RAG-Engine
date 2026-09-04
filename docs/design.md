@@ -36,6 +36,8 @@ than dressed as a generic AI dashboard.
 - The first viewport puts the query instrument first and immediately reveals how the engine will process it.
 - Search results read as ranked entries in a proceedings index: rank, title, metadata, score, and an expandable abstract.
 - RAG answers use a central reading column with citations and source notes in a clearly adjacent evidence region.
+- Evidence rows keep the source index separate while grouping a wrapping title with an explicit
+  cited label, so visual, copied and assistive text preserve the same reading order.
 - Advanced controls stay in a narrow rail or disclosure region and collapse cleanly on small screens.
 - Retrieval stages and readiness checks live inside a collapsed explanatory disclosure so that
   they remain inspectable without competing with search results or answers.

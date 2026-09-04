@@ -655,7 +655,7 @@ def stylesheet() -> str:
 
     .source-heading {
         display: grid;
-        grid-template-columns: 2rem minmax(0, 1fr) auto;
+        grid-template-columns: 2rem minmax(0, 1fr);
         align-items: baseline;
         gap: 0.45rem;
         min-width: 0;
@@ -666,7 +666,17 @@ def stylesheet() -> str:
         font: 400 0.78rem/1 var(--font-mono);
     }
 
+    .source-title-row {
+        display: flex;
+        min-width: 0;
+        flex-wrap: wrap;
+        align-items: baseline;
+        gap: 0.3rem 0.55rem;
+    }
+
     .source-title {
+        min-width: 0;
+        flex: 1 1 12rem;
         color: var(--ink);
         font-family: var(--font-display);
         font-size: 1rem;
@@ -683,9 +693,13 @@ def stylesheet() -> str:
         display: inline-flex;
         align-items: center;
         gap: 0.3rem;
+        flex: 0 0 auto;
+        white-space: nowrap;
         color: var(--success);
         font: 400 0.62rem/1 var(--font-mono);
     }
+
+    .cited-separator { color: var(--ink-muted); }
 
     .citation-badge {
         margin: 0 0.12rem;
@@ -841,7 +855,6 @@ def stylesheet() -> str:
         .paper-title { font-size: 1.18rem; }
         .result-summary span + span { border-left: 0; padding-left: 0; }
         .source-heading { grid-template-columns: 1.7rem minmax(0, 1fr); }
-        .cited-label { grid-column: 2; }
         .source-meta { margin-left: 2.15rem; font-size: 0.78rem; }
         .pipeline-state { grid-template-columns: 0.55rem minmax(0, 1fr); }
         .pipeline-state > span:last-child { grid-column: 2; }

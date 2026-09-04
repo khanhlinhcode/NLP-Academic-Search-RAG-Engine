@@ -466,7 +466,9 @@ def render_sources(sources: list, metadata: dict | None = None) -> None:
             else "No external source link"
         )
         cited_badge = (
-            '<span class="cited-label"><span class="status-dot ready"></span> Cited</span>'
+            '<span class="cited-label" aria-label="Cited source">'
+            '<span class="cited-separator" aria-hidden="true"> · </span>'
+            "<span>Cited</span></span>"
             if cited
             else ""
         )
@@ -474,9 +476,11 @@ def render_sources(sources: list, metadata: dict | None = None) -> None:
             f"""
             <div class="source-item {"is-cited" if cited else ""}">
               <div class="source-heading">
-                <span class="source-index">[{safe(source_index)}]</span>
-                <span class="source-title">{safe(source.get("title"))}</span>
-                {cited_badge}
+                <span class="source-index">[{safe(source_index)}]&ensp;</span>
+                <div class="source-title-row">
+                  <span class="source-title">{safe(source.get("title"))}</span>
+                  {cited_badge}
+                </div>
               </div>
               <div class="source-meta">
                 {safe(authors_text(source.get("authors", []), limit=3))}<br>

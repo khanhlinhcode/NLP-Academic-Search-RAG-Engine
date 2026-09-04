@@ -110,6 +110,28 @@
         {"claim_text": "The two studies report opposing measured outcomes [1, 2].", "factual": true, "cited_indices": [1, 2], "verdict": "supported", "evidence": [{"source_index": 0, "quote": "outcome increased"}, {"source_index": 1, "quote": "outcome decreased"}], "explanation": "The answer reports the disagreement without resolving it."}
       ],
       "expected_valid": true
+    },
+    {
+      "id": "epistemic-overclaim",
+      "answer": "The established metrics are proven insufficient [1].",
+      "sources": [
+        {"id": "s1", "title": "Evaluation metrics", "abstract": "The established metrics have long been used. A complementary measure may provide additional information."}
+      ],
+      "assessments": [
+        {"claim_text": "The established metrics are proven insufficient [1].", "factual": true, "cited_indices": [1], "verdict": "insufficient", "evidence": [{"source_index": 0, "quote": "The established metrics have long been used."}], "explanation": "The quote exists but does not establish insufficiency."}
+      ],
+      "expected_valid": false
+    },
+    {
+      "id": "epistemic-strength-preserved",
+      "answer": "A complementary measure may provide additional information [1].",
+      "sources": [
+        {"id": "s1", "title": "Evaluation metrics", "abstract": "A complementary measure may provide additional information."}
+      ],
+      "assessments": [
+        {"claim_text": "A complementary measure may provide additional information [1].", "factual": true, "cited_indices": [1], "verdict": "supported", "evidence": [{"source_index": 0, "quote": "A complementary measure may provide additional information."}], "explanation": "The answer preserves the source modality and scope."}
+      ],
+      "expected_valid": true
     }
   ]
 }
