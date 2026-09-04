@@ -16,12 +16,15 @@ from nlp_academic_search.ui.api_client import (
 from nlp_academic_search.ui.security import escape_html, safe_external_url
 from nlp_academic_search.ui.styles import stylesheet
 
-st.set_page_config(
-    page_title="Academic Search & RAG",
-    layout="wide",
-    initial_sidebar_state="collapsed",
-)
-st.markdown(stylesheet(), unsafe_allow_html=True)
+
+def configure_page() -> None:
+    """Apply page metadata and the visual theme on every Streamlit rerun."""
+    st.set_page_config(
+        page_title="Academic Search & RAG",
+        layout="wide",
+        initial_sidebar_state="collapsed",
+    )
+    st.markdown(stylesheet(), unsafe_allow_html=True)
 
 
 def configured_api_base_url() -> str:
@@ -803,6 +806,7 @@ def render_ask(client: AcademicSearchClient, health: dict | None) -> None:
 
 
 def main() -> None:
+    configure_page()
     api_base_url = configured_api_base_url()
     backend_api_token = configured_backend_token()
     timeout_seconds = configured_api_request_timeout()

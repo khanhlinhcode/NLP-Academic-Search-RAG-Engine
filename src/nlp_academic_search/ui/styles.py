@@ -6,10 +6,11 @@ from __future__ import annotations
 def stylesheet() -> str:
     """Return the complete, self-contained CSS for the modern research workspace."""
     return """
-    <style>
+    <style id="academic-search-theme">
     @import url('https://fonts.googleapis.com/css2?family=JetBrains+Mono:ital,wght@0,400;0,500;0,600;1,400&family=Source+Sans+3:wght@400;500;600;700&display=swap');
 
     :root {
+        color-scheme: dark;
         --bg-main: #0b0f19;
         --bg-surface: #111827;
         --bg-card: rgba(17, 24, 39, 0.75);
@@ -128,6 +129,7 @@ def stylesheet() -> str:
 
     div[role="radiogroup"] label {
         flex: 1;
+        min-width: 0;
         justify-content: center;
         border-radius: 10px !important;
         border: none !important;
@@ -139,6 +141,7 @@ def stylesheet() -> str:
         background: transparent !important;
         transition: all 0.25s ease;
         cursor: pointer;
+        white-space: nowrap;
     }
 
     div[role="radiogroup"] label:hover {
@@ -245,7 +248,10 @@ def stylesheet() -> str:
     }
 
     /* Textarea & Inputs Focus Glow (PROMPT 3) */
-    [data-testid="stTextInput"] input, [data-testid="stTextArea"] textarea, [data-baseweb="select"] > div {
+    [data-testid="stTextInput"] input,
+    [data-testid="stTextArea"] textarea,
+    [data-testid="stSelectbox"] [role="combobox"],
+    [data-testid="stSelectbox"] [data-baseweb="select"] > div {
         background: rgba(15, 23, 42, 0.9) !important;
         border: 1px solid var(--border-subtle) !important;
         border-radius: 12px !important;
@@ -255,12 +261,26 @@ def stylesheet() -> str:
         transition: all 0.25s ease;
     }
 
+    [data-testid="stTextInput"] input::placeholder,
+    [data-testid="stTextArea"] textarea::placeholder {
+        color: var(--text-muted) !important;
+        opacity: 1;
+    }
+
+    [data-testid="stSelectbox"] [role="combobox"] *,
+    [data-testid="stSelectbox"] svg {
+        color: var(--text-primary) !important;
+        fill: currentColor !important;
+    }
+
     [data-testid="stTextInput"] input:focus, [data-testid="stTextArea"] textarea:focus {
         border-color: var(--primary) !important;
         box-shadow: 0 0 0 3px var(--primary-glow) !important;
     }
 
-    .stButton > button, [data-testid="stFormSubmitButton"] > button {
+    .stButton > button,
+    [data-testid="stButton"] button,
+    [data-testid="stFormSubmitButton"] button {
         border-radius: 12px !important;
         border: 1px solid var(--border-subtle) !important;
         font: 600 0.85rem/1 var(--font-sans) !important;
@@ -268,14 +288,18 @@ def stylesheet() -> str:
         transition: all 0.25s ease !important;
     }
 
-    [data-testid="stFormSubmitButton"] > button[kind="primary"], .stButton > button[kind="primary"] {
+    [data-testid="stFormSubmitButton"] button,
+    button[data-testid^="stBaseButton-primary"],
+    .stButton > button[kind="primary"] {
         background: var(--accent-gradient) !important;
         border: none !important;
         color: white !important;
         box-shadow: 0 4px 16px var(--primary-glow) !important;
     }
 
-    [data-testid="stFormSubmitButton"] > button[kind="primary"]:hover, .stButton > button[kind="primary"]:hover {
+    [data-testid="stFormSubmitButton"] button:hover,
+    button[data-testid^="stBaseButton-primary"]:hover,
+    .stButton > button[kind="primary"]:hover {
         background: var(--accent-gradient-hover) !important;
         transform: translateY(-1px);
         box-shadow: 0 6px 20px rgba(99, 102, 241, 0.4) !important;
@@ -657,7 +681,9 @@ def stylesheet() -> str:
     }
 
     /* Disabled buttons */
-    .stButton > button:disabled, [data-testid="stFormSubmitButton"] > button:disabled {
+    .stButton > button:disabled,
+    [data-testid="stButton"] button:disabled,
+    [data-testid="stFormSubmitButton"] button:disabled {
         background: rgba(30, 41, 59, 0.6) !important;
         border-color: rgba(255, 255, 255, 0.06) !important;
         color: var(--text-muted) !important;
@@ -701,7 +727,10 @@ def stylesheet() -> str:
         .source-heading { grid-template-columns: 1.7rem minmax(0, 1fr); }
         .pipeline-state { align-items: flex-start; font-size: 0.875rem; }
         [data-testid="stTextInput"] input, [data-testid="stTextArea"] textarea,
-        [data-baseweb="select"] > div { font-size: 1rem !important; }
+        [data-testid="stSelectbox"] [role="combobox"],
+        [data-testid="stSelectbox"] [data-baseweb="select"] > div {
+            font-size: 1rem !important;
+        }
     }
 
     @media (prefers-reduced-motion: reduce) {

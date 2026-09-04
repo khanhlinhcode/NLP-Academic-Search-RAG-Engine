@@ -48,6 +48,35 @@ def _running_api(services):
         thread.join(timeout=5)
 
 
+def _theme_block_count(app: AppTest) -> int:
+    return sum("--bg-main: #0b0f19" in str(item.value) for item in app.markdown)
+
+
+@pytest.mark.integration
+def test_streamlit_reinjects_theme_once_across_mode_switches(services, monkeypatch):
+    monkeypatch.setattr(services, "ollama_available", lambda: True)
+    with _running_api(services) as port:
+        monkeypatch.setenv("API_BASE_URL", f"http://127.0.0.1:{port}")
+        app = AppTest.from_file(
+            Path(__file__).parents[2] / "scripts" / "streamlit_app.py", default_timeout=10
+        ).run()
+        assert _theme_block_count(app) == 1
+        assert sum(widget.label == "Query" for widget in app.text_input) == 1
+
+        app.radio[0].set_value("Ask").run()
+        assert _theme_block_count(app) == 1
+        assert len(app.text_area) == 1
+
+        app.radio[0].set_value("Search").run()
+
+    rendered = [str(item.value) for item in app.markdown]
+    assert not app.exception
+    assert _theme_block_count(app) == 1
+    assert sum(widget.label == "Query" for widget in app.text_input) == 1
+    assert sum('class="masthead"' in item for item in rendered) == 1
+    assert app.session_state["ask_history"] == []
+
+
 @pytest.mark.integration
 def test_streamlit_search_and_ask_flows(services, monkeypatch):
     monkeypatch.setattr(services, "ollama_available", lambda: True)
