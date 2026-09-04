@@ -294,6 +294,65 @@ def stylesheet() -> str:
     [data-testid="stSpinner"] { color: var(--oxblood) !important; }
     hr { border-color: var(--rule) !important; }
 
+    /* First-load status veil */
+    .boot-overlay {
+        position: fixed;
+        inset: 0;
+        z-index: 999999;
+        display: grid;
+        min-height: 100vh;
+        min-height: 100dvh;
+        place-items: center;
+        padding: 1rem;
+        background: rgba(243, 239, 230, 0.94);
+        color: var(--ink);
+        cursor: wait;
+        animation: boot-overlay-in 160ms ease-out 120ms both;
+    }
+
+    .boot-status {
+        width: min(100%, 23rem);
+        padding: 1.4rem 1.5rem 1.3rem;
+        border-top: 3px solid var(--oxblood);
+        border-bottom: 1px solid var(--rule-strong);
+        background: var(--surface);
+        text-align: center;
+    }
+
+    .boot-loader {
+        display: block;
+        width: 1.45rem;
+        height: 1.45rem;
+        margin: 0 auto 0.8rem;
+        border: 2px solid var(--rule);
+        border-top-color: var(--oxblood);
+        border-radius: 50%;
+        animation: boot-loader-spin 780ms linear infinite;
+    }
+
+    .boot-status strong {
+        display: block;
+        color: var(--ink);
+        font: 400 1.35rem/1.2 var(--font-display);
+        letter-spacing: -0.01em;
+    }
+
+    .boot-status span:last-child {
+        display: block;
+        margin-top: 0.35rem;
+        color: var(--ink-muted);
+        font: 400 0.78rem/1.5 var(--font-body);
+    }
+
+    @keyframes boot-overlay-in {
+        from { opacity: 0; }
+        to { opacity: 1; }
+    }
+
+    @keyframes boot-loader-spin {
+        to { transform: rotate(360deg); }
+    }
+
     /* Masthead */
     .masthead {
         display: grid;

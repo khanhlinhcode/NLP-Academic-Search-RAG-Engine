@@ -61,6 +61,8 @@ def test_streamlit_reinjects_theme_once_across_mode_switches(services, monkeypat
             Path(__file__).parents[2] / "scripts" / "streamlit_app.py", default_timeout=10
         ).run()
         assert _theme_block_count(app) == 1
+        assert app.session_state["ui_boot_complete"] is True
+        assert not any("Đang tải trang" in str(item.value) for item in app.markdown)
         assert sum(widget.label == "Query" for widget in app.text_input) == 1
         assert app.radio[0].options == ["Search", "Ask"]
         assert any(button.label == "Search papers" for button in app.button)
@@ -486,5 +488,7 @@ def test_streamlit_backend_unavailable_state_is_explicit(monkeypatch):
     ).run()
 
     assert not app.exception
+    assert app.session_state["ui_boot_complete"] is True
+    assert not any("Đang tải trang" in str(item.value) for item in app.markdown)
     assert any("FastAPI is not reachable" in str(message.value) for message in app.warning)
     assert any("OFFLINE" in str(markdown.value) for markdown in app.markdown)

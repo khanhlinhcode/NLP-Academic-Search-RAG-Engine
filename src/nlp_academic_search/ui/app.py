@@ -27,6 +27,22 @@ def configure_page() -> None:
     st.markdown(stylesheet(), unsafe_allow_html=True)
 
 
+def render_boot_overlay():
+    """Show a full-page status veil while the first health check completes."""
+    slot = st.empty()
+    slot.markdown(
+        '<div class="boot-overlay" role="status" aria-live="polite" '
+        'aria-atomic="true" aria-busy="true">'
+        '<div class="boot-status">'
+        '<span class="boot-loader" aria-hidden="true"></span>'
+        "<strong>Đang tải trang…</strong>"
+        "<span>Đang kết nối tới dịch vụ tìm kiếm.</span>"
+        "</div></div>",
+        unsafe_allow_html=True,
+    )
+    return slot
+
+
 def configured_api_base_url() -> str:
     configured = os.getenv("API_BASE_URL")
     if not configured:
@@ -811,6 +827,8 @@ def render_ask(client: AcademicSearchClient, health: dict | None) -> None:
 
 def main() -> None:
     configure_page()
+    is_first_boot = not st.session_state.get("ui_boot_complete", False)
+    boot_overlay = render_boot_overlay() if is_first_boot else None
     api_base_url = configured_api_base_url()
     backend_api_token = configured_backend_token()
     timeout_seconds = configured_api_request_timeout()
@@ -821,6 +839,10 @@ def main() -> None:
         health = get_health(api_base_url, backend_api_token, timeout_seconds)
     except APIError as exc:
         health_error = str(exc)
+    finally:
+        if boot_overlay is not None:
+            boot_overlay.empty()
+            st.session_state["ui_boot_complete"] = True
 
     render_masthead(health, health_error)
     mode = st.radio(

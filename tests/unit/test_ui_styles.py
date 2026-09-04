@@ -89,6 +89,45 @@ def test_stylesheet_avoids_generic_ai_visual_effects():
         assert prohibited not in css
 
 
+def test_first_load_overlay_is_full_viewport_and_motion_safe():
+    css = stylesheet()
+    overlay_rules = css.split("/* First-load status veil */", maxsplit=1)[1].split(
+        "/* Masthead */", maxsplit=1
+    )[0]
+
+    assert ".boot-overlay {" in overlay_rules
+    assert "position: fixed;" in overlay_rules
+    assert "inset: 0;" in overlay_rules
+    assert "z-index: 999999;" in overlay_rules
+    assert "background: rgba(243, 239, 230, 0.94);" in overlay_rules
+    assert ".boot-loader {" in overlay_rules
+    assert "@keyframes boot-loader-spin" in overlay_rules
+    assert "@media (prefers-reduced-motion: reduce)" in css
+
+
+def test_boot_overlay_has_accessible_status_copy_and_returns_its_slot(monkeypatch):
+    from nlp_academic_search.ui import app as ui_app
+
+    class FakeSlot:
+        def __init__(self) -> None:
+            self.markup = ""
+            self.unsafe_allow_html = False
+
+        def markdown(self, markup: str, *, unsafe_allow_html: bool) -> None:
+            self.markup = markup
+            self.unsafe_allow_html = unsafe_allow_html
+
+    slot = FakeSlot()
+    monkeypatch.setattr(ui_app.st, "empty", lambda: slot)
+
+    assert ui_app.render_boot_overlay() is slot
+    assert 'role="status"' in slot.markup
+    assert 'aria-live="polite"' in slot.markup
+    assert 'aria-busy="true"' in slot.markup
+    assert "Đang tải trang…" in slot.markup
+    assert slot.unsafe_allow_html is True
+
+
 def test_desktop_masthead_stays_on_one_line_and_wraps_responsively():
     css = stylesheet()
 
