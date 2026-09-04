@@ -41,6 +41,35 @@ def test_stylesheet_avoids_generic_ai_visual_effects():
         assert prohibited not in css
 
 
+def test_desktop_masthead_stays_on_one_line_and_wraps_responsively():
+    css = stylesheet()
+
+    masthead_rules = css.split("/* Masthead */", maxsplit=1)[1].split(
+        "/* Editorial mode navigation */", maxsplit=1
+    )[0]
+    responsive_rules = css.split("/* Responsive composition */", maxsplit=1)[1]
+
+    assert "max-width: none;" in masthead_rules
+    assert "white-space: nowrap;" in masthead_rules
+    assert ".masthead h1 { white-space: normal; text-wrap: balance; }" in responsive_rules
+
+
+def test_mode_switch_and_form_controls_use_soft_bounded_surfaces():
+    css = stylesheet()
+
+    mode_rules = css.split("/* Editorial mode navigation */", maxsplit=1)[1].split(
+        "/* Search and Ask instruments */", maxsplit=1
+    )[0]
+
+    assert "--radius-control: 8px;" in css
+    assert "--radius-panel: 12px;" in css
+    assert '[data-testid="stRadioGroup"]' in mode_rules
+    assert "border-bottom" not in mode_rules
+    assert "border-radius: 10px;" in mode_rules
+    assert "display: none !important;" in mode_rules
+    assert '[data-testid="stFormSubmitButton"] button p' in css
+
+
 def test_streamlit_native_theme_is_a_warm_light_fallback():
     config_path = Path(__file__).parents[2] / ".streamlit" / "config.toml"
     with config_path.open("rb") as config_file:
