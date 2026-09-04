@@ -136,7 +136,7 @@ def render_masthead(health: dict | None, health_error: str | None) -> None:
             st.rerun()
 
 
-def render_pipeline(health: dict | None) -> None:
+def render_pipeline(health: dict | None, *, label: str) -> None:
     generation_ready = bool(
         health and health.get("generation_available", health.get("ollama_available"))
     )
@@ -147,36 +147,40 @@ def render_pipeline(health: dict | None) -> None:
         health and health.get("providers", {}).get("verification") != "disabled"
     )
     verification_ready = bool(health and health.get("verification_available"))
-    st.markdown('<h3 class="rail-title">Retrieval pipeline</h3>', unsafe_allow_html=True)
-    st.markdown(
-        f"""
-        <ol class="pipeline-steps">
-          <li><span>01</span><div><strong>Understand query</strong><small>Validate and normalize intent</small></div></li>
-          <li><span>02</span><div><strong>Retrieve candidates</strong><small>{safe(retrieval_name)} dense + sparse</small></div></li>
-          <li><span>03</span><div><strong>Fuse rankings</strong><small>Reciprocal rank fusion</small></div></li>
-          <li><span>04</span><div><strong>Refine evidence</strong><small>Optional Cross-Encoder</small></div></li>
-          <li><span>05</span><div><strong>Ground answer</strong><small>{safe(generation_name)} + evidence verification</small></div></li>
-        </ol>
-        """,
-        unsafe_allow_html=True,
-    )
-    st.markdown('<div class="section-rule"></div>', unsafe_allow_html=True)
-    st.markdown('<h3 class="rail-title">System readiness</h3>', unsafe_allow_html=True)
-    checks = [
-        (health is not None, "API connected"),
-        (bool(health and health.get("total_papers")), "Paper index loaded"),
-        (generation_ready, f"{generation_name} model available"),
-    ]
-    if verification_enabled:
-        checks.append((verification_ready, "Semantic verifier model reachable"))
-    for ok, label in checks:
-        state = "Ready" if ok else "Check"
-        color = "ready" if ok else "offline"
+    with st.expander(label, expanded=False):
         st.markdown(
-            f'<div class="readiness-row"><span class="status-dot {color}"></span>'
-            f"<span>{safe(label)}</span><strong>{state}</strong></div>",
+            '<p class="pipeline-note">Five inspectable stages connect the query to its evidence.</p>',
             unsafe_allow_html=True,
         )
+        st.markdown(
+            f"""
+            <ol class="pipeline-steps">
+              <li><span>01</span><div><strong>Understand query</strong><small>Validate and normalize intent</small></div></li>
+              <li><span>02</span><div><strong>Retrieve candidates</strong><small>{safe(retrieval_name)} dense + sparse</small></div></li>
+              <li><span>03</span><div><strong>Fuse rankings</strong><small>Reciprocal rank fusion</small></div></li>
+              <li><span>04</span><div><strong>Refine evidence</strong><small>Optional Cross-Encoder</small></div></li>
+              <li><span>05</span><div><strong>Ground answer</strong><small>{safe(generation_name)} + evidence verification</small></div></li>
+            </ol>
+            """,
+            unsafe_allow_html=True,
+        )
+        st.markdown('<div class="section-rule"></div>', unsafe_allow_html=True)
+        st.markdown('<h3 class="rail-title">System readiness</h3>', unsafe_allow_html=True)
+        checks = [
+            (health is not None, "API connected"),
+            (bool(health and health.get("total_papers")), "Paper index loaded"),
+            (generation_ready, f"{generation_name} model available"),
+        ]
+        if verification_enabled:
+            checks.append((verification_ready, "Semantic verifier model reachable"))
+        for ok, check_label in checks:
+            state = "Ready" if ok else "Check"
+            color = "ready" if ok else "offline"
+            st.markdown(
+                f'<div class="readiness-row"><span class="status-dot {color}"></span>'
+                f"<span>{safe(check_label)}</span><strong>{state}</strong></div>",
+                unsafe_allow_html=True,
+            )
 
 
 def render_benchmark() -> None:
@@ -398,9 +402,9 @@ def render_search(client: AcademicSearchClient, health: dict | None) -> None:
             )
     with rail_col:
         with st.container(key="search_rail"):
-            render_pipeline(health)
-            render_benchmark()
             render_selected_paper(st.session_state.get("selected_paper"))
+            render_pipeline(health, label="How this search works")
+            render_benchmark()
 
 
 def render_sources(sources: list, metadata: dict | None = None) -> None:
@@ -645,7 +649,7 @@ def render_ask(client: AcademicSearchClient, health: dict | None) -> None:
                     "<span>Relevant papers will appear before generation begins.</span></div>",
                     unsafe_allow_html=True,
                 )
-        with answer_col:
+        with answer_col, st.container(key="answer_sheet"):
             st.markdown(
                 '<div class="content-label">Research question</div>', unsafe_allow_html=True
             )
@@ -774,7 +778,7 @@ def render_ask(client: AcademicSearchClient, health: dict | None) -> None:
                     st.warning(warning, icon=None)
     elif history:
         latest = history[-1]
-        with answer_col:
+        with answer_col, st.container(key="answer_sheet"):
             render_saved_answer(latest)
             if len(history) > 1:
                 with st.expander(f"Earlier questions ({len(history) - 1})"):
@@ -787,7 +791,7 @@ def render_ask(client: AcademicSearchClient, health: dict | None) -> None:
                     history.clear()
                     st.rerun()
     else:
-        with answer_col:
+        with answer_col, st.container(key="answer_sheet"):
             st.markdown(
                 """
                 <section class="empty-sheet">
@@ -802,7 +806,7 @@ def render_ask(client: AcademicSearchClient, health: dict | None) -> None:
         with evidence_col:
             with st.container(key="empty_evidence_rail"):
                 render_sources([])
-                render_pipeline(health)
+                render_pipeline(health, label="How this answer is produced")
 
 
 def main() -> None:

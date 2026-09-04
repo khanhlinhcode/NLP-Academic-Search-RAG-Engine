@@ -49,7 +49,7 @@ def _running_api(services):
 
 
 def _theme_block_count(app: AppTest) -> int:
-    return sum("--bg-main: #0b0f19" in str(item.value) for item in app.markdown)
+    return sum("academic-search-theme" in str(item.value) for item in app.markdown)
 
 
 @pytest.mark.integration
@@ -62,17 +62,25 @@ def test_streamlit_reinjects_theme_once_across_mode_switches(services, monkeypat
         ).run()
         assert _theme_block_count(app) == 1
         assert sum(widget.label == "Query" for widget in app.text_input) == 1
+        assert sum(expander.label == "How this search works" for expander in app.expander) == 1
 
         app.radio[0].set_value("Ask").run()
         assert _theme_block_count(app) == 1
         assert len(app.text_area) == 1
+        assert (
+            sum(expander.label == "How this answer is produced" for expander in app.expander) == 1
+        )
 
         app.radio[0].set_value("Search").run()
+        assert _theme_block_count(app) == 1
+        assert sum(widget.label == "Query" for widget in app.text_input) == 1
+
+        app.radio[0].set_value("Ask").run()
 
     rendered = [str(item.value) for item in app.markdown]
     assert not app.exception
     assert _theme_block_count(app) == 1
-    assert sum(widget.label == "Query" for widget in app.text_input) == 1
+    assert len(app.text_area) == 1
     assert sum('class="masthead"' in item for item in rendered) == 1
     assert app.session_state["ask_history"] == []
 
@@ -383,6 +391,7 @@ def test_streamlit_mode_switch_does_not_duplicate_surface_or_history(services, m
     assert sum('class="ledger-heading"' in item for item in rendered) == 1
     assert sum("Grounded answer [1]." in item for item in rendered) == 1
     assert len(app.session_state["ask_history"]) == 1
+    assert app.session_state["selected_paper"]["title"] == "Attention Is All You Need"
 
 
 @pytest.mark.integration
