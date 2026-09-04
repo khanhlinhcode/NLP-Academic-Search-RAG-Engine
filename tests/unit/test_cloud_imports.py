@@ -5,10 +5,12 @@ from __future__ import annotations
 import os
 import subprocess
 import sys
+from pathlib import Path
 
 
 def test_cloud_api_import_isolated_from_local_ml_dependencies():
     environment = os.environ.copy()
+    environment["PYTHONPATH"] = str(Path(__file__).resolve().parents[2] / "src")
     environment.update(
         {
             "ENVIRONMENT": "production",

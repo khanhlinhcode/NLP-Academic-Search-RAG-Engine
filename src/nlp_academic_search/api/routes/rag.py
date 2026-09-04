@@ -626,10 +626,11 @@ def ask_question_stream(
             yield _sse_event(
                 "done",
                 {
+                    "answer": REFUSAL,
                     "metadata": {
                         "citation_validation": validate_citations(REFUSAL, 0).model_dump(),
                         "answer_status": "refused_insufficient_context",
-                    }
+                    },
                 },
             )
 
@@ -770,7 +771,13 @@ def ask_question_stream(
                     else "needs_review",
                 },
             )
-            yield _sse_event("done", {"metadata": metadata.model_dump(mode="json")})
+            yield _sse_event(
+                "done",
+                {
+                    "answer": outcome.answer,
+                    "metadata": metadata.model_dump(mode="json"),
+                },
+            )
         except (
             ServiceBusyError,
             ModelUnavailableError,

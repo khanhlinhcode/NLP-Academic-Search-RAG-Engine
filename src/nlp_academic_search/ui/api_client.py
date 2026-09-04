@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import math
 from collections.abc import Generator
 from typing import Any
 
@@ -13,6 +14,21 @@ class APIError(RuntimeError):
     """A recoverable problem while communicating with the FastAPI service."""
 
 
+DEFAULT_API_REQUEST_TIMEOUT_SECONDS = 60.0
+MAX_API_REQUEST_TIMEOUT_SECONDS = 600.0
+
+
+def parse_request_timeout(value: object) -> float:
+    """Return a bounded HTTP timeout without making UI startup configuration-fragile."""
+    try:
+        timeout = float(str(value))
+    except (TypeError, ValueError):
+        return DEFAULT_API_REQUEST_TIMEOUT_SECONDS
+    if not math.isfinite(timeout) or not 0 < timeout <= MAX_API_REQUEST_TIMEOUT_SECONDS:
+        return DEFAULT_API_REQUEST_TIMEOUT_SECONDS
+    return timeout
+
+
 class AcademicSearchClient:
     """Client for search, health, statistics, and streaming RAG endpoints."""
 
@@ -21,7 +37,7 @@ class AcademicSearchClient:
         base_url: str,
         *,
         api_token: str | None = None,
-        timeout: float = 300.0,
+        timeout: float = DEFAULT_API_REQUEST_TIMEOUT_SECONDS,
         transport: Any = None,
         client: Any = None,
     ) -> None:
@@ -113,7 +129,19 @@ class AcademicSearchClient:
         try:
             with self._client.stream("POST", "/ask/stream", json=payload) as response:
                 response.raise_for_status()
-                yield from _iter_sse(response.iter_lines())
+                terminal_event: str | None = None
+                for event in _iter_sse(response.iter_lines()):
+                    if terminal_event is not None:
+                        raise APIError("The API returned events after the answer stream completed.")
+                    event_type = event.get("event")
+                    if event_type in {"done", "error"}:
+                        terminal_event = str(event_type)
+                    yield event
+                if terminal_event is None:
+                    raise APIError(
+                        "The answer stream ended before final validation completed. "
+                        "Retry the request."
+                    )
         except httpx.ConnectError as exc:
             hint = (
                 "Start it with `make api`."
@@ -149,6 +177,7 @@ def _iter_sse(lines) -> Generator[dict, None, None]:
 
     for raw_line in lines:
         line = raw_line.decode("utf-8") if isinstance(raw_line, bytes) else raw_line
+        line = line.rstrip("\r")
         if line == "":
             decoded = decode_event()
             if decoded is not None:

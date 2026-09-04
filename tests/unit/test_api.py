@@ -1,3 +1,5 @@
+import json
+
 import pytest
 from fastapi.testclient import TestClient
 
@@ -62,6 +64,22 @@ def test_sse_event_order_and_metadata(services, monkeypatch):
         assert body.index("event: sources") < body.index("event: token") < body.index("event: done")
         assert '"name": "citation_validation"' in body
         assert body.rindex('"status": "complete"') < body.index("event: done")
+
+
+def test_sse_refusal_done_contains_authoritative_answer(services, monkeypatch):
+    monkeypatch.setattr(services, "retrieve_for_rag", lambda *_: ([], [], "rrf"))
+
+    with TestClient(create_app(services)) as client:
+        response = client.post(
+            "/ask/stream",
+            json={"question": "What evidence supports this claim?", "top_k": 1},
+        )
+
+    body = response.text
+    assert body.count("event: done") == 1
+    done_payload = json.loads(body.split("event: done\ndata: ", 1)[1].split("\n\n", 1)[0])
+    assert done_payload["answer"] == "Not enough evidence in the retrieved sources."
+    assert done_payload["metadata"]["answer_status"] == "refused_insufficient_context"
 
 
 class RepairingGenerator:
@@ -309,9 +327,16 @@ def test_stream_repairs_once_and_replaces_draft_before_done(services, monkeypatc
     assert generator.async_calls == 2
     assert body.index("event: sources") < body.index("event: token")
     assert body.index('"name": "citation_validation"') < body.index('"name": "citation_repair"')
+    assert body.count("event: answer_replacement") == 1
+    assert body.count("event: done") == 1
     assert body.index("event: answer_replacement") < body.index("event: done")
     assert '"citation_repair_attempted": true' in body
     assert '"claim_citation_coverage": 1.0' in body
+    done_payload = json.loads(body.split("event: done\ndata: ", 1)[1].split("\n\n", 1)[0])
+    assert done_payload["answer"] == (
+        "Novelty rewards retrieval systems [1]. It adds retrieval value [1]."
+    )
+    assert done_payload["metadata"]["answer_status"] == "structurally_valid"
 
 
 def test_semantic_failure_repairs_once_then_becomes_verified(services, monkeypatch):

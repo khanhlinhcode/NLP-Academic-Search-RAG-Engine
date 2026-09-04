@@ -341,7 +341,9 @@ Các route ổn định nằm dưới `/api/v1`; route không version được g
 
 SSE giữ các event cũ và bổ sung stage `structural_validation`, `semantic_validation`,
 `answer_repair`, `final_validation`. Nếu final answer khác draft, `answer_replacement` xuất hiện
-trước `done`; metadata trong `done` luôn mô tả final answer.
+trước `done`. Event `done` là terminal-success duy nhất và chứa cả `answer` cuối authoritative lẫn
+metadata cuối; `error` là terminal-failure. Client xem stream kết thúc thiếu cả hai event này là kết
+nối bị gián đoạn, không phải một câu trả lời hoàn tất.
 
 Ví dụ:
 

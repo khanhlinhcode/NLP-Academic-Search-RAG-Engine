@@ -14,6 +14,7 @@ from nlp_academic_search.api.main import create_app
 from nlp_academic_search.config import settings
 from nlp_academic_search.providers.verification.base import SemanticVerificationInvalidRequest
 from nlp_academic_search.rag.verification import SemanticValidation
+from nlp_academic_search.ui.api_client import AcademicSearchClient
 
 
 @pytest.fixture(autouse=True)
@@ -110,6 +111,16 @@ class ValidStreamGenerator(RepairingStreamGenerator):
         yield "The Transformer uses attention instead of recurrence [1]."
 
 
+class SemanticRepairStreamGenerator(RepairingStreamGenerator):
+    async def generate_stream_async(self, messages, temperature=0.2):
+        del messages, temperature
+        self.calls += 1
+        if self.calls == 1:
+            yield "The Transformer is always perfect [1]."
+        else:
+            yield "The Transformer uses attention instead of recurrence [1]."
+
+
 class SemanticVerifier:
     provider_name = "groq"
     model_name = "verifier-model"
@@ -180,6 +191,36 @@ def test_streamlit_replaces_uncited_draft_with_structurally_valid_answer(service
     assert not any("The draft describes retrieval systems." in item for item in rendered)
     assert any("Citation format valid" in item for item in rendered)
     assert not any("Evidence verified" in item for item in rendered)
+    assert not any("Running" in item for item in rendered)
+    assert not any("Waiting for evidence" in item for item in rendered)
+    assert len(app.session_state["ask_history"]) == 1
+    assert app.session_state["ask_history"][0]["answer"].startswith("The repaired factual claim")
+
+
+@pytest.mark.integration
+def test_streamlit_treats_stream_without_done_as_interrupted(services, monkeypatch):
+    monkeypatch.setattr(services, "ollama_available", lambda: True)
+
+    def truncated_stream(self, question, *, top_k=5, use_reranker=False):
+        del self, question, top_k, use_reranker
+        yield {"event": "token", "data": {"token": "Unverified draft."}}
+
+    monkeypatch.setattr(AcademicSearchClient, "stream_answer", truncated_stream)
+    with _running_api(services) as port:
+        monkeypatch.setenv("API_BASE_URL", f"http://127.0.0.1:{port}")
+        app = AppTest.from_file(
+            Path(__file__).parents[2] / "scripts" / "streamlit_app.py", default_timeout=10
+        ).run()
+        app.radio[0].set_value("Ask").run()
+        app.text_area[0].input("What evidence supports the factual claim?")
+        app.button[0].click().run(timeout=10)
+
+    rendered = [str(item.value) for item in app.markdown]
+    assert not app.exception
+    assert any("Connection" in item and "Interrupted" in item for item in rendered)
+    assert not any("Answer ready" in item for item in rendered)
+    assert not any("Running" in item for item in rendered)
+    assert app.session_state["ask_history"] == []
 
 
 @pytest.mark.integration
@@ -203,6 +244,11 @@ def test_streamlit_does_not_mark_incomplete_repair_as_ready(services, monkeypatc
     assert any("Answer withheld" in item for item in rendered)
     assert not any("The final answer still has" in item for item in rendered)
     assert not any("Answer ready" in item for item in rendered)
+    assert not any("Running" in item for item in rendered)
+    assert not any("Waiting for evidence" in item for item in rendered)
+    assert app.session_state["ask_history"][0]["answer"] == (
+        "Not enough verified evidence in the retrieved sources."
+    )
 
 
 @pytest.mark.integration
@@ -228,6 +274,86 @@ def test_streamlit_marks_only_semantic_valid_answer_as_evidence_verified(service
     assert generator.calls == 1
     assert verifier.calls == 1
     assert any("Answer ready" in item and "Evidence verified" in item for item in rendered)
+    assert not any("Running" in item for item in rendered)
+    assert not any("Waiting for evidence" in item for item in rendered)
+    assert len(app.session_state["ask_history"]) == 1
+
+
+@pytest.mark.integration
+def test_streamlit_semantic_repair_keeps_only_authoritative_final_answer(services, monkeypatch):
+    enable_verification(monkeypatch)
+    generator = SemanticRepairStreamGenerator()
+    verifier = SemanticVerifier([False, True])
+    services.rag_generator = generator  # type: ignore[assignment]
+    services.semantic_verifier = verifier  # type: ignore[assignment]
+    monkeypatch.setattr(services, "ollama_available", lambda: True)
+
+    with _running_api(services) as port:
+        monkeypatch.setenv("API_BASE_URL", f"http://127.0.0.1:{port}")
+        app = AppTest.from_file(
+            Path(__file__).parents[2] / "scripts" / "streamlit_app.py", default_timeout=10
+        ).run()
+        app.radio[0].set_value("Ask").run()
+        app.text_area[0].input("How does attention replace recurrence?")
+        app.button[0].click().run(timeout=10)
+
+    rendered = [str(item.value) for item in app.markdown]
+    assert not app.exception
+    assert generator.calls == 2
+    assert verifier.calls == 2
+    assert not any("always perfect" in item for item in rendered)
+    assert sum("uses attention instead of recurrence [1]" in item for item in rendered) == 1
+    assert app.session_state["ask_history"][0]["metadata"]["answer_status"] == "verified"
+    assert not any("Running" in item for item in rendered)
+    assert not any("Waiting for evidence" in item for item in rendered)
+
+
+@pytest.mark.integration
+def test_streamlit_renders_insufficient_context_as_terminal_refusal(services, monkeypatch):
+    monkeypatch.setattr(services, "ollama_available", lambda: True)
+    monkeypatch.setattr(services, "retrieve_for_rag", lambda *_: ([], [], "rrf"))
+
+    with _running_api(services) as port:
+        monkeypatch.setenv("API_BASE_URL", f"http://127.0.0.1:{port}")
+        app = AppTest.from_file(
+            Path(__file__).parents[2] / "scripts" / "streamlit_app.py", default_timeout=10
+        ).run()
+        app.radio[0].set_value("Ask").run()
+        app.text_area[0].input("What evidence supports this claim?")
+        app.button[0].click().run(timeout=10)
+
+    rendered = [str(item.value) for item in app.markdown]
+    assert not app.exception
+    assert any("Not enough evidence in the retrieved sources." in item for item in rendered)
+    assert any("Answer withheld" in item for item in rendered)
+    assert not any("Answer ready" in item for item in rendered)
+    assert not any("Running" in item for item in rendered)
+    assert not any("Waiting for evidence" in item for item in rendered)
+    assert len(app.session_state["ask_history"]) == 1
+
+
+@pytest.mark.integration
+def test_streamlit_mode_switch_does_not_duplicate_surface_or_history(services, monkeypatch):
+    monkeypatch.setattr(services, "ollama_available", lambda: True)
+    with _running_api(services) as port:
+        monkeypatch.setenv("API_BASE_URL", f"http://127.0.0.1:{port}")
+        app = AppTest.from_file(
+            Path(__file__).parents[2] / "scripts" / "streamlit_app.py", default_timeout=10
+        ).run()
+        app.text_input[0].input("attention transformer")
+        app.button[0].click().run()
+        app.radio[0].set_value("Ask").run()
+        app.text_area[0].input("How does attention replace recurrence?")
+        app.button[0].click().run(timeout=10)
+        app.radio[0].set_value("Search").run()
+        app.radio[0].set_value("Ask").run()
+
+    rendered = [str(item.value) for item in app.markdown]
+    assert not app.exception
+    assert sum('class="masthead"' in item for item in rendered) == 1
+    assert sum('class="ledger-heading"' in item for item in rendered) == 1
+    assert sum("Grounded answer [1]." in item for item in rendered) == 1
+    assert len(app.session_state["ask_history"]) == 1
 
 
 @pytest.mark.integration
