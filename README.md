@@ -1,513 +1,611 @@
+<div align="center">
+
 # NLP Academic Search & RAG Engine
 
 **Retrieve · Read · Reason**
 
-Hệ thống local-first để tìm kiếm bài báo khoa học và hỏi đáp có dẫn nguồn. Pipeline kết hợp BM25,
-Sentence-Transformers, FAISS, Reciprocal Rank Fusion (RRF), Cross-Encoder tùy chọn, FastAPI,
-Streamlit và Ollama.
+Hệ thống tìm kiếm bài báo khoa học và RAG có kiểm chứng bằng chứng, hỗ trợ cả môi trường local
+lẫn kiến trúc cloud nhẹ dành cho demo.
 
-> **Trạng thái mã nguồn:** Production Pilot candidate (Semantically Verified RAG). Hệ thống có hai
-> lớp kiểm tra: Structural Citation Validation và provider-neutral Semantic Evidence Verification
-> với strict JSON Schema. Kết quả quality gate được báo cáo theo từng lần chạy; trạng thái này không
-> đồng nghĩa production SLA hoặc loại bỏ hoàn toàn hallucination.
+[![CI](https://github.com/khanhlinhcode/NLP-Academic-Search-RAG-Engine/actions/workflows/ci.yml/badge.svg)](https://github.com/khanhlinhcode/NLP-Academic-Search-RAG-Engine/actions/workflows/ci.yml)
+![Python](https://img.shields.io/badge/Python-3.11-315c68?logo=python&logoColor=white)
+![Version](https://img.shields.io/badge/version-1.1.0-762f35)
+[![License: MIT](https://img.shields.io/badge/license-MIT-38624d.svg)](LICENSE)
 
-## Mục lục
+[Live Demo](https://nlp-academic-search.streamlit.app/) ·
+[API Documentation](https://nlp-academic-search-api.onrender.com/docs) ·
+[Architecture](docs/architecture.md) ·
+[Deployment Guide](docs/deployment/architecture.md)
 
-- [1. Mục tiêu và phạm vi](#1-mục-tiêu-và-phạm-vi)
-- [2. Những gì có thể tin cậy](#2-những-gì-có-thể-tin-cậy)
-- [3. Kiến trúc hệ thống](#3-kiến-trúc-hệ-thống)
-- [4. Phương pháp truy xuất và RAG](#4-phương-pháp-truy-xuất-và-rag)
-- [5. Cấu trúc repository](#5-cấu-trúc-repository)
-- [6. Cài đặt và chạy nhanh](#6-cài-đặt-và-chạy-nhanh)
-- [7. Cách sử dụng](#7-cách-sử-dụng)
-- [8. Dữ liệu, index và khả năng tái lập](#8-dữ-liệu-index-và-khả-năng-tái-lập)
-- [9. API](#9-api)
-- [10. Đánh giá](#10-đánh-giá)
-- [11. Kiểm tra chất lượng](#11-kiểm-tra-chất-lượng)
-- [12. Docker](#12-docker)
-- [13. Cấu hình và bảo mật](#13-cấu-hình-và-bảo-mật)
-- [14. Giới hạn hiện tại](#14-giới-hạn-hiện-tại)
-- [15. Tài liệu liên quan](#15-tài-liệu-liên-quan)
-- [16. Cloud deployment](#16-cloud-deployment)
+</div>
 
-## 1. Mục tiêu và phạm vi
+---
 
-Dự án giải quyết hai tác vụ riêng biệt nhưng dùng chung một nền tảng dữ liệu:
+## Tổng quan
 
-| Tác vụ      | Mục tiêu                                           | Đầu ra                                               |
-| ----------- | -------------------------------------------------- | ---------------------------------------------------- |
-| **Search**  | Tìm và xếp hạng papers phù hợp với một chủ đề.     | Danh sách papers, metadata, score và liên kết nguồn. |
-| **Ask/RAG** | Tổng hợp câu trả lời chỉ từ evidence đã truy xuất. | Câu trả lời streaming, citation và Evidence ledger.  |
+NLP Academic Search & RAG Engine giải quyết hai tác vụ trên cùng một corpus bài báo:
 
-Thiết kế local-first giữ corpus, embeddings và LLM trên máy người dùng. FastAPI là lớp dịch vụ
-trung tâm; Streamlit chỉ giao tiếp với API và không trực tiếp tải index hoặc gọi model.
+| Workspace | Mục tiêu | Kết quả |
+| --- | --- | --- |
+| **Search** | Tìm và xếp hạng bài báo theo từ khóa hoặc ý nghĩa | Papers, metadata, score, nguồn và phân trang |
+| **Ask** | Tổng hợp câu trả lời từ evidence đã truy xuất | Answer streaming, citation, trạng thái kiểm chứng và Evidence ledger |
 
-## 2. Những gì có thể tin cậy
+Hệ thống không chỉ kiểm tra citation có đúng định dạng. Khi semantic verification được bật, mỗi
+factual claim còn phải được ánh xạ tới evidence quote thuộc đúng nguồn đã dẫn. Server xác nhận quote
+thực sự tồn tại trong title hoặc abstract trước khi trả trạng thái `verified`.
 
-- Ingestion mới dùng endpoint metadata arXiv OAI-PMH chính thức và giữ lại arXiv ID, tác giả,
-  category, ngày, URL, DOI và license khi nguồn cung cấp.
-- Các bản ghi cũ có ID dạng `paper_XXXXX` được gắn nguồn
-  `legacy-ccdv-arxiv-summarization`. Hệ thống không tự tạo metadata hoặc URL arXiv giả.
-- Semantic index phải có `index_manifest.json` ràng buộc corpus hash, thứ tự document ID, số lượng
-  và chiều vector, embedding model/revision, chuẩn hóa, loại FAISS và phiên bản thư viện.
-- Nội dung paper được coi là **untrusted evidence**, không phải instruction cho LLM.
-- RAG validation có 2 lớp:
-  - **Layer 1 (Structural):** Kiểm tra index nguồn và độ phủ trích dẫn theo từng câu factual.
-  - **Layer 2 (Semantic Evidence):** Provider trả strict structured claim assessment. Server kiểm
-    tra exact evidence quote trong đúng title/abstract đã citation sau khi chuẩn hóa Unicode NFKC,
-    case và whitespace. Cùng model identifier với generator được ghi là non-independent.
-- Hệ thống hỗ trợ **Fail-Closed**: nếu bằng chứng không thể xác thực ngữ nghĩa, câu trả lời sẽ bị thu
-  hồi (`refused_unverified`) thay vì được đánh dấu ready. Đây là đánh đổi có chủ ý: an toàn grounding
-  cao hơn nhưng answer coverage thấp hơn, đồng thời verification làm tăng latency và quota. Exact
-  quote chỉ chứng minh đoạn evidence tồn tại trong corpus, không chứng minh paper đúng ngoài thực tế.
+> [!IMPORTANT]
+> Đây là một **research/demo system theo hướng production**, không phải dịch vụ có production SLA.
+> Semantic verification làm giảm rủi ro câu trả lời không bám nguồn nhưng không chứng minh paper
+> đúng ngoài thực tế và không loại bỏ hoàn toàn hallucination.
 
-Corpus runtime nằm trong `data/`, không được commit vào Git. Vì vậy số papers thực tế có thể là
-corpus legacy 15.000 bản ghi hoặc một corpus arXiv mới với metadata đã xác minh.
+## Live deployment
 
-## 3. Kiến trúc hệ thống
+| Thành phần | Địa chỉ | Vai trò |
+| --- | --- | --- |
+| Streamlit UI | [nlp-academic-search.streamlit.app](https://nlp-academic-search.streamlit.app/) | Giao diện Search/Ask và Evidence ledger |
+| FastAPI | [API documentation](https://nlp-academic-search-api.onrender.com/docs) | HTTP/SSE contract và orchestration |
+| Readiness | [`/health/ready`](https://nlp-academic-search-api.onrender.com/health/ready) | Trạng thái corpus, retrieval, generation và verifier |
 
-### 3.1 Sơ đồ tổng thể
+Demo cloud hiện dùng **Streamlit Community Cloud → Render → Qdrant Cloud + Groq**. Các dịch vụ
+free tier có thể ngủ khi không hoạt động, vì vậy lần truy cập đầu có thể chậm. UI hiển thị lớp
+“Đang tải trang…” trong lúc chờ backend hoàn tất health check.
 
-```text
-                         OFFLINE / BUILD-TIME
+`/health/*`, `/docs` và `/openapi.json` là public. Search, Ask và `/stats` yêu cầu Bearer token khi
+`BACKEND_API_TOKEN` được cấu hình; người dùng demo không cần nhập token trực tiếp vì Streamlit giữ
+token ở Secrets.
 
-arXiv OAI-PMH
-      │
-      ▼
-validate ── deduplicate ── quarantine
-      │
-      ▼
-versioned corpus + corpus_manifest.json
-      │
-      ├── BM25 corpus
-      └── Sentence-BERT ── FAISS index + index_manifest.json
+## Điểm nổi bật
 
-                         ONLINE / REQUEST-TIME
+- **Hybrid retrieval:** BM25 cho exact match, dense retrieval cho semantic similarity và RRF để
+  hợp nhất thứ hạng mà không trộn các score khác thang đo.
+- **Hai runtime profile:** local-first cho nghiên cứu có thể tái lập; cloud profile nhẹ để chạy
+  FastAPI trong giới hạn Render Free.
+- **Semantically Verified RAG:** structural citation validation, semantic claim verification,
+  exact-quote checking và fail-closed refusal.
+- **Streaming có trạng thái:** SSE phát sources, tokens, validation stages, answer replacement và
+  terminal metadata rõ ràng.
+- **Provenance có kiểm soát:** corpus/index manifest ràng buộc checksum, document order, embedding
+  model, vector dimension và phiên bản dữ liệu.
+- **Provider boundaries:** UI không tải model/index; cloud API không import Torch,
+  Sentence-Transformers, FAISS, Ollama hoặc Streamlit.
+- **Operational safeguards:** bearer authentication, CORS allowlist, in-memory rate limiting,
+  bounded concurrency, timeout, request ID và structured error response.
+- **Evaluation tooling:** retrieval metrics, RAG metrics, semantic-verification fixtures, load test
+  và security tests.
 
-Browser ──► Streamlit UI ──HTTP/SSE──► FastAPI
-                                         │
-                         ┌───────────────┴────────────────┐
-                         ▼                                ▼
-                  Retrieval service                 RAG service
-            BM25 + FAISS → RRF → rerank?      retrieve → context → LLM (Ollama/Groq)
-                         │                                │
-                         ▼                                ▼
-                 ranked papers             Layer 1 Structural Check
-                                                          │
-                                                          ▼
-                                                   Layer 2 Semantic Verifier (Groq)
-                                                          │
-                                                          ▼
-                                                   1-Pass Repair / Refusal
-                                                          │
-                                                          ▼
-                                                  answer + verified metadata
+## Kiến trúc hệ thống
+
+```mermaid
+flowchart LR
+    User[Browser] --> UI[Streamlit UI]
+    UI -->|HTTP / SSE| API[FastAPI]
+
+    API --> Retrieval[Retrieval provider]
+    Retrieval --> Local[Local: BM25 + SBERT / FAISS]
+    Retrieval --> Cloud[Cloud: Qdrant dense + BM25]
+    Local --> LocalFusion[Local RRF / weighted fusion]
+    Cloud --> CloudFusion[Qdrant server-side RRF]
+    LocalFusion --> Search[Ranked papers]
+    CloudFusion --> Search
+
+    Search --> Context[Context builder]
+    Context --> Generator[Ollama or Groq generator]
+    Generator --> Structural[Structural citation validation]
+    Structural --> Semantic[Semantic evidence verification]
+    Semantic --> Final[Verified answer / one-pass repair / refusal]
+    Final --> UI
 ```
 
-### 3.2 Trách nhiệm của từng lớp
+### Hai deployment profile
 
-| Lớp          | Trách nhiệm                                                                              |
-| ------------ | ---------------------------------------------------------------------------------------- |
-| `data`       | Mô hình `Paper`, ingestion adapter, làm sạch, validation và manifest.                    |
-| `search`     | BM25, embedding/FAISS, fusion, filter và reranking.                                      |
-| `rag`        | Xây context/prompt, generator, 2-layer verifier, streaming và repair logic.             |
-| `evaluation` | Metrics retrieval và RAG (Source utilization, Citation coverage, Evidence validity).    |
-| `api`        | Contract HTTP, dependency lifecycle, timeout, concurrency và lỗi có cấu trúc.            |
-| `ui`         | Trình bày Search/Ask, trạng thái hệ thống và Evidence ledger.                            |
-| `scripts`    | Entry point cho ingestion, indexing, audit và evaluation; không chứa business logic lõi. |
+| Thuộc tính | `local` | `cloud` |
+| --- | --- | --- |
+| Retrieval | `rank-bm25` + Sentence-Transformers/FAISS | Qdrant Cloud dense + BM25 |
+| Fusion | RRF hoặc weighted fusion | Qdrant server-side RRF |
+| Generation | Ollama | Groq |
+| Reranker | Local Cross-Encoder, tùy chọn | Tắt để giữ container nhẹ |
+| Semantic verifier | Groq hoặc tắt; mặc định tắt | Groq hoặc tắt theo cấu hình |
+| Dữ liệu runtime | Corpus/index versioned trong `data/` | Versioned Qdrant collection + stable alias |
+| Mục đích | Phát triển, nghiên cứu, benchmark offline | Demo tách UI/API trên free tiers |
 
-Hướng phụ thuộc chính là `UI → API → domain services → data/config`. Các module retrieval và RAG
-không phụ thuộc giao diện, nhờ đó có thể kiểm thử độc lập và tái sử dụng qua API hoặc CLI.
+Profile được chọn tường minh bằng configuration; cloud không tự fallback sang local. Provider
+factory dùng lazy imports để cloud API không kéo theo local ML stack.
 
-## 4. Phương pháp truy xuất và RAG
+## Luồng hoạt động
 
-### 4.1 Luồng Search
+### Search pipeline
 
 ```text
 query
-  ├── Unicode-safe tokenize ──► BM25 ─────────────┐
-  └── Sentence-BERT ──► normalized vector ─► FAISS├──► RRF ─► reranker? ─► top-k
-                                                   ┘
+  ├── tokenize / exact terminology ──► BM25 ─────────────┐
+  └── semantic embedding ─────────────► dense retrieval ─┤
+                                                         ├──► RRF ─► reranker? ─► top-k
+metadata filters ────────────────────────────────────────┘
 ```
 
-- **BM25** ưu tiên từ khóa chính xác, tên phương pháp, từ viết tắt và thuật ngữ hiếm.
-- **Dense retrieval** tìm papers diễn đạt cùng ý bằng từ khác thông qua cosine-equivalent inner
-  product trên vector đã chuẩn hóa.
-- **RRF** hợp nhất thứ hạng thay vì cộng trực tiếp hai score khác thang đo:
+- **BM25** phù hợp với thuật ngữ chuyên ngành, tên phương pháp, acronym, paper ID và exact phrase.
+- **Dense retrieval** tìm nội dung diễn đạt cùng ý bằng từ ngữ khác.
+- **RRF** hợp nhất vị trí xếp hạng:
 
 ```text
 RRF(d) = Σ 1 / (k + rank_i(d))
 ```
 
-- **Cross-Encoder** có thể chấm lại một candidate pool nhỏ nhưng tăng latency đáng kể.
+- **Cross-Encoder** chỉ rerank candidate pool nhỏ và được tắt trên cloud profile để tránh tăng RAM.
+- `rrf_score` là tín hiệu xếp hạng, không phải xác suất paper đúng hay phần trăm liên quan.
 
-`rrf_score` là tín hiệu **xếp hạng**, không phải xác suất paper đúng hay phần trăm liên quan.
-
-### 4.2 Luồng Ask/RAG
+### Ask / verified RAG pipeline
 
 ```text
 question
    ↓
-hybrid retrieval → top-k evidence → relevance gate
+hybrid retrieval → relevance gate → stable source indices
    ↓
-context budget: title + metadata + abstract + stable source index
+context budget: title + metadata + abstract
    ↓
-system policy + untrusted evidence + user question
+grounding policy + XML-delimited untrusted evidence
    ↓
-Ollama / Groq LLM Generator
+LLM generation → SSE tokens
    ↓
-SSE Stream: stage → sources → tokens
+structural citation validation
    ↓
-structural_validation → semantic_validation (Groq JSON Schema)
+semantic claim-to-evidence verification (nếu bật)
    ↓
-answer_repair? (max 1-pass) → answer_replacement? → final_validation
+one-pass repair (nếu cần) → final validation
    ↓
-final verified answer / refused_unverified + strict citation metadata + Evidence ledger
+verified answer / refusal + Evidence ledger
 ```
 
-Nếu evidence không vượt ngưỡng phù hợp, hệ thống nên từ chối trả lời thay vì để model đoán. Mỗi
-nguồn có index ổn định như `[1]`, `[2]`; cùng index đó được dùng trong prompt, câu trả lời và
-Evidence ledger. Citation được kiểm tra theo từng câu factual: citation ở câu sau không bao phủ câu
-trước. Hệ thống chỉ thử sửa citation tối đa một lần và thay draft bằng final answer qua event
-`answer_replacement` khi cần.
+Các nguyên tắc grounding chính:
 
-## 5. Cấu trúc repository
+1. Mỗi factual sentence phải có citation riêng; citation ở câu sau không bao phủ câu trước.
+2. Citation index phải nằm trong danh sách sources đã truy xuất.
+3. Retrieved paper content luôn là **untrusted evidence**, không phải instruction cho model.
+4. Semantic verifier trả strict structured output; server kiểm tra evidence quote bằng Unicode
+   NFKC, case-folding và whitespace normalization.
+5. Draft không hợp lệ chỉ được repair tối đa một lần và không được thêm thông tin mới.
+6. Nếu final validation vẫn thất bại trong fail-closed mode, draft bị thay bằng refusal chuẩn.
 
-Dự án dùng **Python src layout**: tên package là `nlp_academic_search`, còn `src/` chỉ là thư mục
-chứa source code. Cách này ngăn test vô tình import code từ working directory thay vì package đã
-được cài.
+### SSE contract
+
+`POST /api/v1/ask/stream` sử dụng các event sau:
+
+| Event | Ý nghĩa |
+| --- | --- |
+| `stage` | Trạng thái retrieval, generation, validation hoặc repair |
+| `sources` | Evidence ledger ổn định trước khi generation bắt đầu |
+| `token` | Phần nội dung draft đang streaming |
+| `citation_validation` | Kết quả kiểm tra citation theo cấu trúc |
+| `semantic_validation` | Kết quả claim-to-evidence verification |
+| `answer_replacement` | Thay toàn bộ draft bằng final answer đã sửa/refusal |
+| `warning` | Trạng thái degraded hoặc verification không đầy đủ |
+| `done` | Terminal success, chứa final answer và final metadata authoritative |
+| `error` | Terminal failure có mã lỗi và khả năng retry |
+
+Client coi stream kết thúc mà không có `done` hoặc `error` là kết nối bị gián đoạn. UI không hiển
+thị “Answer ready” trước khi final validation hoàn tất.
+
+## Cấu trúc repository
+
+Dự án sử dụng **Python src layout** để test và runtime luôn import package đã cài thay vì vô tình
+import trực tiếp từ working directory.
 
 ```text
 .
-├── src/
-│   └── nlp_academic_search/
-│       ├── api/                  # FastAPI app, routes, schemas, service container
-│       ├── data/                 # Paper model, preprocessing, manifests, source adapters
-│       │   └── sources/          # arXiv OAI-PMH và interface nguồn dữ liệu
-│       ├── evaluation/           # Retrieval/RAG metrics
-│       ├── providers/            # Local/cloud retrieval, generation, reranking, verification
-│       ├── rag/                  # Prompt, generator, streaming, citations
-│       ├── search/               # BM25, FAISS, fusion, filters, reranker
-│       ├── ui/                   # Streamlit client, views, styles, assets
-│       └── config.py             # Typed settings từ environment
-├── scripts/                      # CLI/operational entry points
+├── src/nlp_academic_search/
+│   ├── api/                       # FastAPI app, routes, schemas, auth/rate limiting
+│   ├── data/                      # Paper schema, ingestion, validation, manifests
+│   │   └── sources/               # arXiv OAI-PMH và BEIR adapters
+│   ├── evaluation/                # Retrieval, RAG và load-test metrics/runners
+│   ├── providers/
+│   │   ├── generation/            # Ollama và Groq
+│   │   ├── retrieval/             # Local FAISS và Qdrant Cloud
+│   │   ├── reranking/             # Local Cross-Encoder hoặc disabled
+│   │   └── verification/          # Groq semantic verifier hoặc disabled
+│   ├── rag/                       # Prompt, citation và semantic verification domain logic
+│   ├── search/                    # BM25, FAISS, fusion, filters và reranker
+│   ├── ui/                        # Streamlit app, API client, security, styles và fonts
+│   └── config.py                  # Typed environment settings
+├── scripts/                       # Thin CLI/operational entry points
 ├── tests/
-│   ├── unit/                     # Deterministic tests, không cần service/model thật
-│   └── integration/              # Local service và end-to-end tests có marker
+│   ├── unit/                      # Deterministic tests, không cần service/model thật
+│   ├── integration/               # FastAPI/Streamlit/provider integration tests
+│   └── security/                  # Auth, CORS, injection và secret-handling tests
 ├── benchmarks/
-│   ├── retrieval/                # Golden retrieval queries, documents và qrels
-│   └── rag/                      # Golden RAG questions và expected evidence
-├── data/                         # Corpus/index runtime; không commit
+│   ├── retrieval/                 # Documents, queries và qrels có kiểm soát
+│   └── rag/                       # RAG và semantic-verification golden cases
+├── configs/experiments/           # Reproducible TOML experiment configurations
 ├── docs/
-│   ├── architecture.md           # Ranh giới module và dependency rules
-│   ├── product.md                # Phạm vi và nguyên tắc sản phẩm
-│   └── design.md                 # Design system của UI
-├── .github/workflows/ci.yml      # Quality gate trên CI
-├── CONTRIBUTING.md               # Quy trình phát triển và kiểm tra thay đổi
-├── pyproject.toml                # Package metadata, dependencies và tool configuration
-├── uv.lock                       # Dependency lock để tái lập môi trường
-├── Makefile                      # Giao diện lệnh thống nhất
-├── Dockerfile
-└── docker-compose.yml
+│   ├── cards/                     # Data card và model card
+│   ├── deployment/                # Cloud architecture, setup và operations
+│   ├── security/                  # Threat model
+│   ├── architecture.md
+│   ├── design.md
+│   └── product.md
+├── deploy/Dockerfile.api          # Lightweight cloud API image
+├── Dockerfile                     # Local API/UI image
+├── docker-compose.yml             # Local Ollama + API + UI stack
+├── render.yaml                    # Render Blueprint
+├── Makefile                       # Stable developer/operations commands
+├── pyproject.toml                 # Package metadata, dependencies và tool config
+└── uv.lock                        # Locked dependency graph
 ```
 
-## 6. Cài đặt và chạy nhanh
+Dependency direction được giữ theo nguyên tắc:
 
-### 6.1 Yêu cầu
+```text
+UI → API → services → providers → search/rag/data/config
+scripts → reusable application modules
+evaluation → search/rag/data
+```
 
-- Python 3.11
-- [uv](https://docs.astral.sh/uv/)
-- [Ollama](https://ollama.com/) nếu sử dụng Ask/RAG
+Business logic không được đặt trong `scripts/`, và `data`, `search`, `rag` không import ngược từ
+`api` hoặc `ui`.
 
-### 6.2 Chuẩn bị môi trường và dữ liệu
+## Cài đặt local
+
+### Yêu cầu
+
+- Python **3.11** được khuyến nghị cho toàn bộ workflow (`pyproject.toml` hỗ trợ `>=3.11,<3.13`).
+- [uv](https://docs.astral.sh/uv/) để quản lý môi trường và lockfile.
+- [Ollama](https://ollama.com/) nếu sử dụng local Ask/RAG.
+- Dung lượng/RAM phù hợp với embedding model, FAISS index và LLM được chọn.
+
+### 1. Clone và cài dependencies
 
 ```bash
-cp .env.example .env
-make setup
+git clone https://github.com/khanhlinhcode/NLP-Academic-Search-RAG-Engine.git
+cd NLP-Academic-Search-RAG-Engine
 
-# Lần chạy thử đầu tiên nên dùng corpus nhỏ.
+cp .env.example .env
+make install
+```
+
+`make install` cài local runtime và Streamlit bằng Python 3.11. Contributor cần toàn bộ dependency
+groups có thể dùng `make setup`.
+
+### 2. Chuẩn bị corpus và index
+
+Lần chạy đầu nên dùng một corpus nhỏ:
+
+```bash
 ARXIV_MAX_RECORDS=1000 make download
 make index
-
-# Chỉ cần pull một lần. Nếu `ollama list` hoạt động thì Ollama server đã chạy.
-ollama pull qwen2.5:7b
 ```
 
-Muốn ingest mặc định 15.000 records:
+`make download` lấy metadata qua arXiv OAI-PMH, validate, deduplicate, ghi manifest và atomically
+activate corpus version mới. `make index` tạo Sentence-Transformer embeddings, FAISS index,
+`index_manifest.json` và chỉ chuyển `CURRENT` sau khi artifact hợp lệ.
+
+Nếu nhập một JSONL có sẵn thay vì dùng arXiv ingestion:
 
 ```bash
-make download
+uv run python -m scripts.preprocess_data --input path/to/papers.jsonl
 make index
 ```
 
-### 6.3 Khởi động ứng dụng
+### 3. Chuẩn bị Ollama
 
-Terminal 1:
+```bash
+ollama pull qwen2.5:7b
+ollama list
+```
+
+Nếu `ollama list` hoạt động thì service đã chạy. Không khởi động thêm `ollama serve` khi cổng
+`11434` đang được sử dụng.
+
+### 4. Chạy API và UI
+
+Terminal thứ nhất:
 
 ```bash
 make api
 ```
 
-Terminal 2:
+Terminal thứ hai:
 
 ```bash
 make ui
 ```
 
-- Swagger/OpenAPI: <http://localhost:8000/docs>
-- Streamlit UI: <http://localhost:8501>
+| Service | Local URL |
+| --- | --- |
+| Streamlit | <http://localhost:8501> |
+| FastAPI docs | <http://localhost:8000/docs> |
+| Readiness | <http://localhost:8000/health/ready> |
 
-Không chạy thêm `ollama serve` nếu lệnh đó báo `address already in use` và `ollama list` vẫn trả
-về danh sách model; điều đó có nghĩa service đã hoạt động trên cổng `11434`.
-
-## 7. Cách sử dụng
+## Cách sử dụng
 
 ### Search
 
-Nhập một chủ đề hoặc mô tả nhu cầu thông tin, ví dụ:
+Nhập một research concept hoặc mô tả nhu cầu thông tin:
 
 ```text
 information retrieval evaluation using precision and recall
 ```
 
-Chọn `Hybrid · RRF` làm mặc định. Dùng BM25 khi cần khớp thuật ngữ chính xác và Semantic khi câu
-query mang tính diễn giải. Metadata filter nên được dùng sau khi đã kiểm tra corpus có category,
-năm và tác giả đáng tin cậy.
+`Hybrid · RRF` là lựa chọn mặc định phù hợp cho phần lớn truy vấn. Dùng BM25 cho exact terminology
+và Semantic cho câu hỏi mô tả ý nghĩa. Có thể lọc theo category, năm, tác giả và source khi corpus
+có metadata tương ứng.
 
 ### Ask
 
-Đặt một câu hỏi cần tổng hợp evidence, ví dụ:
+Đặt một câu hỏi cần tổng hợp từ các paper đã index:
 
 ```text
 Why do the authors propose novelty-based evaluation in addition to precision and recall?
 ```
 
-Một câu trả lời ngắn nhưng bám sát abstract và dẫn đúng nguồn tốt hơn một câu trả lời dài chứa kiến
-thức ngoài corpus. Evidence ledger cho biết nguồn nào đã truy xuất và nguồn nào thực sự được trích
-dẫn.
+Evidence ledger phân biệt sources đã retrieve với sources thực sự được citation. Trạng thái cuối
+cho biết answer đã verified, chỉ structurally valid, verification unavailable hay bị từ chối.
 
-## 8. Dữ liệu, index và khả năng tái lập
+## HTTP API
 
-### 8.1 Versioning và atomic activation
+Các route chính ổn định dưới `/api/v1`; route không version được giữ làm alias tương thích ngược.
 
-Mỗi lần ingestion hoặc build index tạo một version mới. Version đang phục vụ không bị ghi đè. Chỉ
-sau khi output mới vượt validation, con trỏ `CURRENT` mới được cập nhật atomically.
+| Method và route | Chức năng |
+| --- | --- |
+| `GET /api/v1/search` | Hybrid search, RRF/weighted fusion, filters và pagination |
+| `GET /api/v1/search/bm25` | Sparse keyword retrieval |
+| `GET /api/v1/search/semantic` | Dense retrieval bằng provider đang active |
+| `POST /api/v1/ask` | Grounded answer không streaming |
+| `POST /api/v1/ask/stream` | Grounded answer qua SSE |
+| `GET /health/live` | Process liveness, không gọi external provider |
+| `GET /health/ready` | Readiness của corpus, retrieval, generation và verifier |
+| `GET /stats` | Corpus/index/model metadata; có auth khi token được bật |
 
-Khi API khởi động, index manifest được đối chiếu với:
+Ví dụ local không bật authentication:
+
+```bash
+curl -fsS 'http://localhost:8000/api/v1/search?q=hybrid+retrieval&top_k=5&category=cs.CL'
+
+curl -fsS -X POST 'http://localhost:8000/api/v1/ask' \
+  -H 'Content-Type: application/json' \
+  -d '{
+    "question": "How does retrieval-augmented generation use evidence?",
+    "top_k": 5,
+    "use_reranker": false
+  }'
+```
+
+Với deployment có authentication:
+
+```bash
+export API_URL='https://your-api.example.com'
+: "${BACKEND_API_TOKEN:?Export BACKEND_API_TOKEN securely before running}"
+
+curl -fsS "$API_URL/api/v1/search?q=information+retrieval&top_k=3" \
+  -H "Authorization: Bearer $BACKEND_API_TOKEN"
+```
+
+Không đặt token thật trong shell history, README, source code hoặc commit Git.
+
+### Final answer status
+
+| `metadata.answer_status` | Ý nghĩa |
+| --- | --- |
+| `verified` | Structural và semantic validation đều pass |
+| `structurally_valid` | Citation structure pass; semantic verification bị tắt |
+| `verification_unavailable` | Structural pass; verifier không khả dụng và policy cho phép fail-open |
+| `refused_insufficient_context` | Retrieval không cung cấp đủ evidence |
+| `refused_unverified` | Draft hoặc bản repair không vượt final validation |
+
+## Dữ liệu, index và provenance
+
+Runtime data nằm trong `data/` và không được commit. Mỗi ingestion/index build tạo version mới;
+version đang phục vụ không bị ghi đè. `CURRENT` chỉ được cập nhật atomically sau validation.
+
+Local index manifest ràng buộc:
 
 - SHA-256 của corpus;
-- hash thứ tự document ID;
-- số lượng và chiều vector;
-- embedding model và revision;
-- normalization và FAISS metric/type.
+- hash theo thứ tự document ID;
+- document count và vector dimension;
+- embedding model/revision;
+- normalization, FAISS metric/type và library versions.
 
-Mismatch làm startup fail rõ ràng, tránh trả kết quả sai âm thầm.
+Cloud migration tạo Qdrant collection có version, audit paper count/schema/model/corpus checksum,
+chạy smoke queries rồi mới chuyển stable alias `academic-papers-current`.
 
-### 8.2 Corpus legacy
-
-Không coi `data/raw/papers.jsonl` từ workflow Hugging Face cũ là metadata thư mục học thuật đã xác
-minh. Có thể tạo compatibility manifest cho index cũ bằng:
+### Legacy index adoption
 
 ```bash
 uv run python -m scripts.build_index --adopt-existing
 ```
 
-Manifest này chỉ xác minh shape, order và hash; nó không khẳng định provenance của model weights
-lịch sử. Để có provenance đầy đủ, hãy ingest lại arXiv và chạy `make index`.
+Compatibility manifest chỉ xác minh shape, order và checksum. Nó không chứng minh provenance của
+historical model weights hoặc bibliographic metadata cũ. Muốn provenance đầy đủ, hãy ingest lại dữ
+liệu và rebuild index.
 
-## 9. API
+## Evaluation
 
-Các route ổn định nằm dưới `/api/v1`; route không version được giữ làm alias tương thích ngược.
-
-| Route                         | Chức năng                                                        |
-| ----------------------------- | ---------------------------------------------------------------- |
-| `GET /api/v1/search`          | Hybrid RRF/weighted search, filter và pagination.                |
-| `GET /api/v1/search/bm25`     | Sparse retrieval.                                                |
-| `GET /api/v1/search/semantic` | Dense FAISS retrieval.                                           |
-| `POST /api/v1/ask`            | Grounded answer không streaming.                                 |
-| `POST /api/v1/ask/stream`     | SSE gồm `stage`, `sources`, `token`, `answer_replacement`, `warning`, `error`, `done`. |
-| `GET /health/live`            | Process liveness.                                                |
-| `GET /health/ready`           | Readiness của corpus, index và RAG dependency.                   |
-| `GET /stats`                  | Metadata của corpus, index và model.                             |
-
-`metadata.answer_status` là state machine của kết quả cuối:
-
-- `verified`: structural và semantic validation đều pass;
-- `structurally_valid`: citation format pass nhưng semantic verification bị tắt;
-- `verification_unavailable`: citation format pass, verifier không khả dụng và policy cho phép
-  fail-open có cảnh báo;
-- `refused_insufficient_context`: retrieval không cung cấp đủ context;
-- `refused_unverified`: draft hoặc bản repair không vượt final validation.
-
-SSE giữ các event cũ và bổ sung stage `structural_validation`, `semantic_validation`,
-`answer_repair`, `final_validation`. Nếu final answer khác draft, `answer_replacement` xuất hiện
-trước `done`. Event `done` là terminal-success duy nhất và chứa cả `answer` cuối authoritative lẫn
-metadata cuối; `error` là terminal-failure. Client xem stream kết thúc thiếu cả hai event này là kết
-nối bị gián đoạn, không phải một câu trả lời hoàn tất.
-
-Ví dụ:
-
-```bash
-curl 'http://localhost:8000/api/v1/search?q=hybrid+retrieval&top_k=10&category=cs.CL'
-
-curl -X POST 'http://localhost:8000/api/v1/ask' \
-  -H 'Content-Type: application/json' \
-  -d '{"question":"How does retrieval-augmented generation use evidence?","top_k":5,"use_reranker":false}'
-```
-
-## 10. Đánh giá
-
-### 10.1 Nguyên tắc
-
-- Tách query, corpus và qrels; không tạo query bằng cách chép nguyên văn relevant document.
-- Không tune hyperparameter trên test split.
-- Báo cáo cả effectiveness và latency.
-- Ghi rõ corpus version, model/revision, `k`, seed và cấu hình retrieval.
-- Không suy rộng kết luận từ fixture nhỏ sang chất lượng production.
-
-Benchmark 20 query trước đây đã bị loại vì mỗi query được chép từ document liên quan và chỉ có một
-relevant item. Các số 100% Recall@10 và 0.9693 nDCG@10 không còn được dùng làm quality claim.
-
-### 10.2 Retrieval evaluation
+### Retrieval
 
 ```bash
 make eval-retrieval
 ```
 
-Fixture `benchmarks/retrieval/in_domain_golden.json` kiểm tra pipeline và metrics. Lần chạy ghi nhận ngày
-2026-09-03 chỉ có 3 queries và 3 documents:
+Metrics gồm `Precision@K`, `Recall@K`, `MRR@K`, `MAP@K`, `nDCG@K`, `HitRate@K` và p50/p95/p99
+latency. Fixture được commit hiện có **3 documents và 3 hand-authored queries**; mục đích là
+regression testing, không phải bằng chứng chất lượng production.
 
-| Method | Recall@3 |  MRR@3 |  MAP@3 | nDCG@3 | p50 latency |
-| ------ | -------: | -----: | -----: | -----: | ----------: |
-| BM25   |   0.6667 | 1.0000 | 0.6667 | 0.8842 |     0.05 ms |
-| Dense  |   1.0000 | 1.0000 | 0.8889 | 0.9760 |     5.91 ms |
-| RRF    |   1.0000 | 1.0000 | 0.8889 | 0.9760 |     5.43 ms |
-
-Kết quả này xác nhận hành vi của code, không phải benchmark đủ mạnh. Có thể import BEIR/SciFact mà
-không sửa judgments:
+Có thể import BEIR/SciFact mà không sửa qrels:
 
 ```bash
-uv run python -m scripts.import_beir path/to/scifact path/to/scifact/qrels/test.tsv \
-  data/benchmarks/scifact-test.json --name scifact
+uv run python -m scripts.import_beir \
+  path/to/scifact \
+  path/to/scifact/qrels/test.tsv \
+  data/benchmarks/scifact-test.json \
+  --name scifact
+
 uv run python -m scripts.run_evaluation \
-  --benchmark data/benchmarks/scifact-test.json -k 10
+  --benchmark data/benchmarks/scifact-test.json \
+  -k 10
 ```
 
-### 10.3 RAG evaluation
+### RAG và semantic verification
 
 ```bash
 make eval-rag
 ```
 
-Script đánh giá context precision/recall, answer relevance, citation metrics, semantic claim
-coverage, evidence quote validity, refusal correctness, repair, latency và verifier error rate trên
-API đang chạy. `citation_coverage` được giữ tương thích ngược và biểu thị tỷ lệ nguồn được dùng
-(cùng nghĩa với `source_utilization`); `claim_citation_coverage` biểu thị tỷ lệ câu factual có
-citation. `faithfulness_proxy` chỉ là compatibility metric cấu trúc đã deprecated, không phải
-semantic faithfulness. Báo cáo tách model generator, provider/model verifier và tính độc lập của
-verifier.
+Committed fixtures gồm 3 RAG cases và 12 semantic-verification cases. Báo cáo theo dõi context
+precision/recall, answer relevance, citation precision, source utilization, claim citation
+coverage, semantic claim coverage, evidence quote validity, refusal correctness, repair outcome,
+verifier errors và latency.
 
-## 11. Kiểm tra chất lượng
+Metric semantics cần đọc đúng:
+
+- `citation_coverage` được giữ để tương thích ngược và hiện mang nghĩa tỷ lệ nguồn được dùng;
+- `source_utilization` là tỷ lệ retrieved sources xuất hiện trong citation;
+- `claim_citation_coverage` là tỷ lệ factual sentences có citation;
+- `evidence_quote_validity` là tỷ lệ quote tồn tại trong đúng cited source;
+- `faithfulness_proxy` chỉ là structural compatibility metric đã deprecated, không phải semantic
+  faithfulness score.
+
+Reports được ghi dưới `reports/experiments/` và bị Git ignore. Mỗi kết luận benchmark phải đi kèm
+dataset/split, corpus version, model/revision, config, seed, `k`, hardware và limitations.
+
+> [!WARNING]
+> SciFact/BEIR production-quality benchmark chưa được công bố trong repository. Không sử dụng
+> regression fixture nhỏ để tuyên bố hệ thống đạt chất lượng SOTA hoặc production.
+
+## Quality gates
 
 ```bash
-make test            # unit tests, không cần network hoặc model thật
-make coverage        # coverage gate 70%
-make lint
-make format-check
-make typecheck
-make package
-make check           # chạy quality gate cục bộ
-uv run pytest -m integration
+make test                 # Unit tests
+make test-security        # Security tests
+make test-integration     # Local API/Streamlit/provider integration
+make coverage             # Branch coverage, fail dưới 80%
+make lint                 # Ruff
+make format-check         # Ruff formatter verification
+make typecheck            # Pyright
+make package              # Build wheel + source distribution
+make check                # Full local non-integration quality gate
 ```
 
-CI chạy lint, format, type checking, unit coverage, package build, Compose validation và kiểm tra
-secret/generated data không bị commit.
+GitHub Actions chạy trên Python 3.11 với locked dependencies và kiểm tra:
 
-## 12. Docker
+- Ruff lint và formatting;
+- Pyright;
+- non-integration tests với branch coverage gate **80%**;
+- package build từ locked environment;
+- Docker Compose configuration;
+- tracked secrets, generated corpus/index và model weights.
 
-Image dùng multi-stage Python 3.11 build và chạy bằng non-root user. Corpus/index và model cache
-được mount thay vì đóng vào image.
+Không thay đổi golden qrels chỉ để cải thiện score.
+
+## Docker
+
+### Local stack
 
 ```bash
 docker compose config --quiet
 docker compose up --build
+```
 
-# Smoke test đầy đủ, tốn nhiều tài nguyên hơn:
+Compose khởi động Ollama, pull model, rồi mới đưa API và UI lên. Corpus/index được mount vào
+container thay vì đóng trong image. Local stack đặt memory limit 8 GB cho API; nhu cầu thực tế phụ
+thuộc model, corpus và concurrency.
+
+Smoke test:
+
+```bash
 make docker-smoke
 ```
 
-Qwen2.5 7B cần vài GB lưu trữ và khoảng 8 GB RAM khả dụng trở lên. GPU acceleration phụ thuộc môi
-trường và không được bật trong Compose portable mặc định.
+### Lightweight cloud image
 
-## 13. Cấu hình và bảo mật
-
-Mọi biến môi trường và ràng buộc được mô tả trong `.env.example`. Khi triển khai ngoài máy cá nhân:
-
-- đặt `ENVIRONMENT=production`;
-- dùng allowlist cụ thể cho `CORS_ORIGINS`; wildcard bị từ chối;
-- không expose Ollama trực tiếp ra mạng không tin cậy;
-- đặt authentication/rate limiting ở reverse proxy đáng tin cậy;
-- giữ `EMBEDDING_DEVICE=cpu` và `EMBEDDING_NATIVE_THREADS=1` làm mặc định ổn định;
-- pin `EMBEDDING_MODEL_REVISION` trước khi build release index;
-- không commit `.env`, corpus, embeddings, model weights hoặc evaluation reports cục bộ.
-
-Semantic verification được bật rõ ràng bằng `SEMANTIC_VERIFICATION_ENABLED`; provider/model,
-timeout, fail-closed và repair budget lần lượt do `VERIFICATION_PROVIDER`,
-`VERIFICATION_MODEL_NAME`, `VERIFICATION_TIMEOUT_SECONDS`, `VERIFICATION_FAIL_CLOSED` và
-`MAX_RAG_REPAIR_ATTEMPTS` điều khiển. Không đặt secret trong repository. Với production
-fail-closed, `/health/ready` chuyển sang degraded nếu verifier bắt buộc không khả dụng.
-
-Ứng dụng có bounded workers, generation concurrency limit, deadline, request ID, structured logs và
-sanitized errors. Ứng dụng chưa có multi-tenant authorization hoặc distributed job queue.
-
-## 14. Giới hạn hiện tại
-
-- Corpus legacy 15.000 dòng không có metadata tác giả/category/ngày/arXiv đã xác minh.
-- Adopted FAISS manifest không chứng minh được historical model-weight provenance.
-- Semantic verifier vẫn có thể đánh giá entailment sai; exact quote validation chỉ là lớp kiểm tra
-  evidence tồn tại, không phải phép chứng minh factual truth ngoài corpus.
-- Chất lượng Ask phụ thuộc trực tiếp vào độ phủ và độ mới của corpus.
-- UI là research workspace cục bộ, chưa phải hệ thống hội thoại đa người dùng có persistent memory.
-- SciFact/BEIR, reranker calibration và benchmark production với provider thật vẫn chưa hoàn tất.
-
-## 15. Tài liệu liên quan
-
-- [Architecture](docs/architecture.md): ranh giới module và quy tắc dependency.
-- [Product](docs/product.md): mục tiêu, người dùng và nguyên tắc sản phẩm.
-- [Design](docs/design.md): hệ thống thiết kế và hành vi giao diện.
-- [Data Card](docs/cards/data-card.md): nguồn dữ liệu, quy trình thu thập, schema và giới hạn.
-
-## 16. Cloud deployment
-
-Dự án có hai profile độc lập:
-
-| Profile | Retrieval | Generation | Mục đích |
-|---|---|---|---|
-| `local` | `rank-bm25` + Sentence-Transformer/FAISS + RRF | Ollama | Nghiên cứu, benchmark và chạy offline |
-| `cloud` | Qdrant Cloud dense + BM25 + server-side RRF | Groq | Demo tách UI/API trên free tiers |
-
-Cloud topology:
-
-```text
-Streamlit Community Cloud -> Render FastAPI -> Qdrant Cloud + Groq
+```bash
+make docker-cloud
 ```
 
-Render image không chứa Torch, spaCy, Sentence-Transformers, FAISS, Ollama, corpus hoặc model
-weights. Cloud generation và semantic verification dùng provider bên ngoài; mỗi verification call
-có thêm latency/quota và fail-closed có thể giảm answer coverage.
-Đọc hướng dẫn theo thứ tự:
+`deploy/Dockerfile.api` tạo multi-stage non-root image chỉ cài extra `api-cloud`, chạy một Uvicorn
+worker và bind `0.0.0.0:${PORT:-10000}`. Image không chứa corpus, index hoặc local ML weights.
 
-1. [Deployment architecture](docs/deployment/architecture.md)
-2. [Qdrant Cloud migration](docs/deployment/qdrant-cloud.md)
-3. [Render backend](docs/deployment/render-backend.md)
-4. [Streamlit Community Cloud](docs/deployment/streamlit-cloud.md)
+## Cloud deployment
+
+```text
+Streamlit Community Cloud
+          │ HTTPS / SSE
+          ▼
+Render FastAPI (free web service)
+          ├── Qdrant Cloud: vectors, payloads, BM25, dense search, RRF
+          └── Groq: generation và optional semantic verification
+```
+
+Triển khai theo thứ tự:
+
+1. [Kiến trúc deployment](docs/deployment/architecture.md)
+2. [Tạo và migrate Qdrant Cloud](docs/deployment/qdrant-cloud.md)
+3. [Deploy FastAPI lên Render](docs/deployment/render-backend.md)
+4. [Deploy UI lên Streamlit Community Cloud](docs/deployment/streamlit-cloud.md)
 5. [Operations](docs/deployment/operations.md)
 6. [Troubleshooting](docs/deployment/troubleshooting.md)
 
-Các free tier có cold start, hibernation và quota; cấu hình này dành cho research/demo, không cung
-cấp production SLA.
-- [Model Card](docs/cards/model-card.md): mô hình embedding, reranker, generator và latency.
-- [Threat Model & Security](docs/security/threat-model.md): phân tích mối đe dọa và kiểm thử an toàn.
-- [Experiment Configurations](configs/experiments/): cấu hình thử nghiệm có thể tái lập (TOML).
-- [Contributing](CONTRIBUTING.md): cách thiết lập môi trường và quality gate cho thay đổi mới.
-- [LICENSE](LICENSE): giấy phép MIT.
+Các nhóm configuration quan trọng:
+
+| Nhóm | Biến chính |
+| --- | --- |
+| Provider profile | `DEPLOYMENT_PROFILE`, `RETRIEVAL_PROVIDER`, `GENERATION_PROVIDER`, `RERANKER_PROVIDER` |
+| Qdrant | `QDRANT_URL`, `QDRANT_API_KEY`, `QDRANT_COLLECTION_ALIAS`, model và checksum settings |
+| Groq | `GROQ_API_KEY`, `GROQ_MODEL`, timeout và output-token settings |
+| Verification | `SEMANTIC_VERIFICATION_ENABLED`, `VERIFICATION_PROVIDER`, `VERIFICATION_MODEL_NAME`, `VERIFICATION_FAIL_CLOSED` |
+| API security | `BACKEND_API_TOKEN`, `CORS_ORIGINS`, concurrency và rate limits |
+| Streamlit | `API_BASE_URL`, `BACKEND_API_TOKEN` trong Streamlit Secrets |
+
+Không sao chép secret value vào `render.yaml`, `.env.example`, README, issue, log hoặc commit. Xem
+đầy đủ defaults và validation rules tại [.env.example](.env.example).
+
+## Security model
+
+- Paper title/abstract được xử lý như dữ liệu không tin cậy và được cô lập khỏi system policy.
+- Production cloud bắt buộc `BACKEND_API_TOKEN`; so sánh token dùng constant-time comparison.
+- Production CORS từ chối wildcard và chỉ cho phép origin đã cấu hình.
+- Search/Ask có rate limit theo subject và bounded request/inference concurrency.
+- API trả sanitized structured errors kèm `request_id`, không trả stack trace hoặc credential.
+- Qdrant/Groq credentials chỉ nằm ở Render và migration workstation; Streamlit chỉ giữ API URL và
+  backend token.
+- `.env`, Streamlit Secrets, corpus, embeddings, reports và model files đều bị loại khỏi Git.
+
+Rate limiter hiện lưu trong memory của từng process; đây không phải distributed rate limiting cho
+multi-instance production. Xem threat analysis tại [docs/security/threat-model.md](docs/security/threat-model.md).
+
+## Giới hạn hiện tại
+
+- Demo corpus chỉ đại diện cho phần dữ liệu đã index; chất lượng Ask bị giới hạn bởi độ phủ và độ
+  mới của title/abstract, không đọc toàn văn paper.
+- External benchmark chuẩn SciFact/BEIR và reranker calibration đầy đủ chưa được công bố.
+- Verifier có thể false-positive hoặc false-negative; dùng cùng model identifier với generator là
+  non-independent verification và được ghi rõ trong metadata.
+- Exact quote validation chứng minh đoạn text tồn tại trong source, không chứng minh source đúng.
+- Context hiện bị giới hạn theo số ký tự và có thể truncate abstract mà không đảm bảo sentence
+  boundary.
+- Render/Streamlit free tiers có cold start, hibernation, quota và không cung cấp SLA.
+- Hệ thống chưa có multi-tenant authorization, persistent chat storage, distributed cache/rate
+  limiting hoặc background job queue.
+- Local Ollama 7B và Sentence-Transformers/FAISS cần nhiều tài nguyên hơn cloud API profile.
+
+## Tài liệu
+
+| Tài liệu | Nội dung |
+| --- | --- |
+| [Architecture](docs/architecture.md) | Module boundaries, dependency direction và runtime contracts |
+| [Product](docs/product.md) | Người dùng, phạm vi và product principles |
+| [Design system](docs/design.md) | Premium Scholarly Editorial UI language |
+| [Data card](docs/cards/data-card.md) | Data source, schema, processing và limitations |
+| [Model card](docs/cards/model-card.md) | Models, intended use, evaluation và failure modes |
+| [Threat model](docs/security/threat-model.md) | Assets, trust boundaries, attacks và mitigations |
+| [Contributing](CONTRIBUTING.md) | Development workflow và change rules |
+
+## License
+
+Phát hành theo giấy phép [MIT](LICENSE).
+
+---
+
+<div align="center">
+
+Built for inspectable academic retrieval and evidence-grounded answers.
+
+</div>
