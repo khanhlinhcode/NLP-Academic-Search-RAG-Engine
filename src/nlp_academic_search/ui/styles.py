@@ -667,16 +667,13 @@ def stylesheet() -> str:
     }
 
     .source-title-row {
-        display: flex;
+        display: block;
         min-width: 0;
-        flex-wrap: wrap;
-        align-items: baseline;
-        gap: 0.3rem 0.55rem;
+        line-height: 1.25;
     }
 
     .source-title {
         min-width: 0;
-        flex: 1 1 12rem;
         color: var(--ink);
         font-family: var(--font-display);
         font-size: 1rem;
@@ -692,9 +689,8 @@ def stylesheet() -> str:
     .cited-label {
         display: inline-flex;
         align-items: center;
-        gap: 0.3rem;
-        flex: 0 0 auto;
         white-space: nowrap;
+        vertical-align: baseline;
         color: var(--success);
         font: 400 0.62rem/1 var(--font-mono);
     }

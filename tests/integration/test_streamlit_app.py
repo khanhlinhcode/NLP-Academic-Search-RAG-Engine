@@ -319,6 +319,9 @@ def test_streamlit_marks_only_semantic_valid_answer_as_evidence_verified(service
     assert any('<span class="source-title-row">' in item for item in rendered)
     assert not any('<div class="source-title-row">' in item for item in rendered)
     assert any('class="cited-separator"' in item and " · " in item for item in rendered)
+    assert not any('aria-hidden="true"> · </span>' in item for item in rendered)
+    assert not any('aria-label="Cited source"' in item for item in rendered)
+    assert not any(item.strip() in {"</span>", "</div>"} for item in rendered)
     assert not any("Running" in item for item in rendered)
     assert not any("Waiting for evidence" in item for item in rendered)
     assert len(app.session_state["ask_history"]) == 1

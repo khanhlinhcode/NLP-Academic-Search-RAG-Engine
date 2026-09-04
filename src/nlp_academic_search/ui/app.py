@@ -466,9 +466,9 @@ def render_sources(sources: list, metadata: dict | None = None) -> None:
             else "No external source link"
         )
         cited_badge = (
-            '<span class="cited-label" aria-label="Cited source">'
-            '<span class="cited-separator" aria-hidden="true"> · </span>'
-            "<span>Cited</span></span>"
+            '<span class="cited-label">'
+            '<span class="cited-separator"> · </span>'
+            '<span class="cited-status">Cited</span></span>'
             if cited
             else ""
         )
