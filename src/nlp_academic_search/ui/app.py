@@ -467,7 +467,7 @@ def render_sources(sources: list, metadata: dict | None = None) -> None:
         )
         cited_badge = (
             '<span class="cited-label">'
-            '<span class="cited-separator"> · </span>'
+            '<span class="cited-separator">\u00a0·\u00a0</span>'
             '<span class="cited-status">Cited</span></span>'
             if cited
             else ""

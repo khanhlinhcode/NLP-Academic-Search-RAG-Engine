@@ -178,7 +178,7 @@ def test_evidence_rows_wrap_titles_and_preserve_text_separators():
     assert "source_markup = (" in app_source
     assert "st.markdown(source_markup, unsafe_allow_html=True)" in app_source
     assert 'class="cited-label"' in app_source
-    assert 'class="cited-separator"> · </span>' in app_source
+    assert 'class="cited-separator">\\u00a0·\\u00a0</span>' in app_source
     assert 'class="cited-status">Cited</span>' in app_source
     assert 'aria-label="Cited source"' not in app_source
     assert 'aria-hidden="true"> · </span>' not in app_source
@@ -229,6 +229,8 @@ def test_cited_evidence_heading_preserves_semantic_separator(monkeypatch):
     )
 
     heading_markup = _source_heading_markup(source_markup)
+    assert "\u00a0·\u00a0" in heading_markup
+    assert "> · </span>" not in heading_markup
     assert _semantic_text(heading_markup) == "[1] Example paper · Cited"
     assert "Example paperCited" not in _semantic_text(heading_markup)
     assert heading_markup.count("Cited") == 1
