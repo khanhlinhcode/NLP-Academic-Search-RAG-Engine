@@ -472,25 +472,20 @@ def render_sources(sources: list, metadata: dict | None = None) -> None:
             if cited
             else ""
         )
-        st.markdown(
-            f"""
-            <div class="source-item {"is-cited" if cited else ""}">
-              <div class="source-heading">
-                <span class="source-index">[{safe(source_index)}]&ensp;</span>
-                <span class="source-title-row">
-                  <span class="source-title">{safe(source.get("title"))}</span>
-                  {cited_badge}
-                </span>
-              </div>
-              <div class="source-meta">
-                {safe(authors_text(source.get("authors", []), limit=3))}<br>
-                {safe(categories_text(source))} · {safe(source.get("year"))} · {identifier}<br>
-                {link_html}
-              </div>
-            </div>
-            """,
-            unsafe_allow_html=True,
+        source_markup = (
+            f'<div class="source-item {"is-cited" if cited else ""}">'
+            '<div class="source-heading">'
+            f'<span class="source-index">[{safe(source_index)}]&ensp;</span>'
+            '<span class="source-title-row">'
+            f'<span class="source-title">{safe(source.get("title"))}</span>'
+            f"{cited_badge}"
+            "</span></div>"
+            '<div class="source-meta">'
+            f"{safe(authors_text(source.get('authors', []), limit=3))}<br>"
+            f"{safe(categories_text(source))} · {safe(source.get('year'))} · {identifier}<br>"
+            f"{link_html}</div></div>"
         )
+        st.markdown(source_markup, unsafe_allow_html=True)
 
 
 def render_saved_answer(entry: dict) -> None:

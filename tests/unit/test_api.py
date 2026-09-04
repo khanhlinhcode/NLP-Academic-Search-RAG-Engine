@@ -46,7 +46,7 @@ def test_ask_response_has_grounding_metadata(services, monkeypatch):
         )
         assert response.status_code == 200
         payload = response.json()
-        assert payload["metadata"]["prompt_version"] == "academic-grounding-v4"
+        assert payload["metadata"]["prompt_version"] == "academic-grounding-v5"
         assert payload["metadata"]["citation_validation"]["valid"] is True
         assert payload["metadata"]["citation_repair_attempted"] is False
         assert payload["sources"][0]["source_url"].startswith("https://arxiv.org/")
@@ -88,6 +88,7 @@ class RepairingGenerator:
     def __init__(self) -> None:
         self.sync_calls = 0
         self.async_calls = 0
+        self.repair_prompt = ""
 
     def generate(self, messages, temperature=0.2):
         self.sync_calls += 1
@@ -95,6 +96,7 @@ class RepairingGenerator:
             return "Novelty rewards retrieval systems. It adds retrieval value [1]."
         assert temperature == 0.0
         assert "citation-only editor" in messages[0]["content"]
+        self.repair_prompt = messages[1]["content"]
         return "Novelty rewards retrieval systems [1]. It adds retrieval value [1]."
 
     async def generate_stream_async(self, messages, temperature=0.2):
@@ -105,6 +107,7 @@ class RepairingGenerator:
         else:
             assert temperature == 0.0
             assert "citation-only editor" in messages[0]["content"]
+            self.repair_prompt = messages[1]["content"]
             yield "Novelty rewards retrieval systems [1]. "
             yield "It adds retrieval value [1]."
 
@@ -230,6 +233,9 @@ def test_sync_answer_repairs_citations_once(services, monkeypatch):
     assert response.status_code == 200
     payload = response.json()
     assert generator.sync_calls == 2
+    assert '"uncited_factual_sentences": ["Novelty rewards retrieval systems."]' in (
+        generator.repair_prompt
+    )
     assert payload["answer"].count("[1]") == 2
     assert payload["metadata"]["citation_repair_attempted"] is True
     assert payload["metadata"]["citation_repair_succeeded"] is True

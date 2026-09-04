@@ -30,7 +30,12 @@ from nlp_academic_search.providers.generation.base import (
     RAGGenerationError,
 )
 from nlp_academic_search.providers.verification.base import SemanticVerificationError
-from nlp_academic_search.rag.citations import CitationValidation, is_refusal, validate_citations
+from nlp_academic_search.rag.citations import (
+    CitationValidation,
+    is_refusal,
+    uncited_factual_sentences,
+    validate_citations,
+)
 from nlp_academic_search.rag.prompt_builder import (
     PROMPT_VERSION,
     InsufficientContextError,
@@ -141,6 +146,27 @@ def _verify(services: ServiceContainer, package: PromptPackage, answer: str) -> 
             getattr(exc, "provider_http_status", None),
             getattr(exc, "provider_request_id", None),
         )
+
+
+def _repair_feedback(
+    answer: str, structural: CitationValidation, semantic: SemanticCheck
+) -> dict[str, object]:
+    semantic_issues: list[dict[str, object]] = []
+    if semantic.validation is not None:
+        semantic_issues = [
+            {
+                "claim_text": claim.claim_text,
+                "verdict": claim.verdict,
+                "cited_indices": claim.cited_indices,
+            }
+            for claim in semantic.validation.claims
+            if claim.factual and claim.verdict != "supported"
+        ]
+    return {
+        "invalid_citation_indices": structural.invalid_indices,
+        "uncited_factual_sentences": uncited_factual_sentences(answer),
+        "semantic_claims_requiring_revision": semantic_issues,
+    }
 
 
 def _verification_warning(status: AnswerStatus, reason: str | None) -> str | None:
@@ -321,7 +347,12 @@ def _validate_and_repair_sync(
         raise ModelUnavailableError("Generation provider is not configured")
     try:
         repaired = services.rag_generator.generate(
-            build_citation_repair_messages(package, answer), temperature=0.0
+            build_citation_repair_messages(
+                package,
+                answer,
+                validation_feedback=_repair_feedback(answer, initial, initial_semantic),
+            ),
+            temperature=0.0,
         ).strip()
         if not repaired:
             raise GenerationInvalidResponseError("Citation repair returned an empty answer")
@@ -426,7 +457,12 @@ async def _validate_and_repair_async(
         parts = [
             token
             async for token in services.rag_generator.generate_stream_async(
-                build_citation_repair_messages(package, answer), temperature=0.0
+                build_citation_repair_messages(
+                    package,
+                    answer,
+                    validation_feedback=_repair_feedback(answer, initial, initial_semantic),
+                ),
+                temperature=0.0,
             )
         ]
         repaired = "".join(parts).strip()

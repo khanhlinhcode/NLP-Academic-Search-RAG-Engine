@@ -128,6 +128,8 @@ def test_evidence_rows_wrap_titles_and_preserve_text_separators():
     assert "white-space: nowrap;" in source_rules
     assert '<span class="source-title-row">' in app_source
     assert '<div class="source-title-row">' not in app_source
+    assert "source_markup = (" in app_source
+    assert "st.markdown(source_markup, unsafe_allow_html=True)" in app_source
     assert 'class="cited-label" aria-label="Cited source"' in app_source
     assert 'class="cited-separator" aria-hidden="true"> · </span>' in app_source
     assert "[{safe(source_index)}]&ensp;" in app_source
@@ -141,6 +143,35 @@ def test_ask_failure_copy_distinguishes_repair_failures():
     assert '"repair_disabled":' in app_source
     assert '"repair_provider_error":' in app_source
     assert '"final_validation_failed":' in app_source
+
+
+def test_evidence_item_is_emitted_as_flat_html(monkeypatch):
+    from nlp_academic_search.ui import app as ui_app
+
+    rendered: list[str] = []
+    monkeypatch.setattr(
+        ui_app.st,
+        "markdown",
+        lambda body, **_kwargs: rendered.append(body),
+    )
+    ui_app.render_sources(
+        [
+            {
+                "index": 1,
+                "title": "A long evidence title",
+                "authors": ["Researcher"],
+                "categories": ["cs.IR"],
+                "year": 2026,
+                "source": "fixture",
+            }
+        ],
+        {"citation_validation": {"cited_indices": []}},
+    )
+
+    source_markup = next(item for item in rendered if 'class="source-item ' in item)
+    assert "\n" not in source_markup
+    assert '<span class="source-title-row">' in source_markup
+    assert "</span></div>" in source_markup
 
 
 def test_streamlit_native_theme_is_a_warm_light_fallback():

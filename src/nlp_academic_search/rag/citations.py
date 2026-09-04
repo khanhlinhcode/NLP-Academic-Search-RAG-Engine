@@ -119,6 +119,11 @@ def factual_sentences(answer: str) -> list[str]:
     return [sentence for sentence in segment_sentences(answer) if _is_factual_sentence(sentence)]
 
 
+def uncited_factual_sentences(answer: str) -> list[str]:
+    """Return factual sentences that require targeted citation repair."""
+    return [sentence for sentence in factual_sentences(answer) if not _CITATION.search(sentence)]
+
+
 def validate_citations(answer: str, source_count: int) -> CitationValidation:
     if source_count < 0:
         raise ValueError("source_count must not be negative")
