@@ -12,6 +12,8 @@
 | `generation_rate_limited` | Groq free quota reached | Wait for reset; Search remains usable. |
 | Empty RAG evidence | Corpus coverage or filtering issue | Inspect Search with the same question and broaden filters/corpus. |
 | Wrong semantic results after model change | Papers and queries use different vector spaces | Create a new collection and reindex all papers with the new exact model. |
+| UI shows generation model not found or unready | Configured Ollama model is missing locally | Run `ollama list`, pull model (e.g. `ollama pull qwen2.5:7b`), set `LLM_MODEL_NAME`, or enable `ALLOW_MODEL_FALLBACK=true` in local. |
+| RAG returns `refused_unverified` | LLM claims could not be verified against paper text | Normal fail-closed behavior; check retrieved paper abstracts or refine question. |
 
 Do not fix port errors by increasing memory-intensive startup timeouts. Cloud startup must remain
 lightweight, and external state belongs in Qdrant rather than Render's ephemeral filesystem.

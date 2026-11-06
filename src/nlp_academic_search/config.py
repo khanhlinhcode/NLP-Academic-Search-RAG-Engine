@@ -105,6 +105,7 @@ class Settings(BaseSettings):
     reranker_provider: Literal["local", "disabled"] = "local"
     ollama_base_url: AnyHttpUrl = "http://localhost:11434"  # type: ignore[assignment]
     llm_model_name: str = "qwen2.5:7b"
+    allow_model_fallback: bool = False
     generation_timeout_seconds: float = Field(default=120.0, gt=0, le=600)
     generation_concurrency_limit: int = Field(default=1, ge=1, le=32)
     embedding_model_name: str = "all-MiniLM-L6-v2"
@@ -218,6 +219,8 @@ class Settings(BaseSettings):
             raise ValueError("SEARCH_CANDIDATE_POOL must be >= DEFAULT_TOP_K")
         if self.environment == "production" and "*" in self.cors_origin_list:
             raise ValueError("CORS_ORIGINS cannot contain '*' in production")
+        if self.environment == "production" and self.allow_model_fallback:
+            raise ValueError("ALLOW_MODEL_FALLBACK cannot be enabled in production")
         if self.deployment_profile == "cloud":
             if self.retrieval_provider != "qdrant":
                 raise ValueError("cloud profile requires RETRIEVAL_PROVIDER=qdrant")

@@ -259,7 +259,11 @@ def create_app(service_container: ServiceContainer | None = None) -> FastAPI:
             models={
                 "embedding": (retrieval.embedding_model if retrieval else None)
                 or settings.embedding.model_name,
-                "llm": settings.active_generation_model,
+                "llm": (
+                    getattr(services.rag_generator, "model_name", settings.active_generation_model)
+                    if services and services.rag_generator is not None
+                    else settings.active_generation_model
+                ),
                 "reranker": settings.reranker.model_name
                 if settings.reranker.enabled
                 else "disabled",

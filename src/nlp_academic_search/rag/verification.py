@@ -79,7 +79,12 @@ def _assessment_claim_is_in_answer(claim: ClaimAssessment, answer: str) -> bool:
 
 
 def _containing_sentence(claim_text: str, sentences: list[str]) -> str | None:
-    return next((sentence for sentence in sentences if claim_text in sentence), None)
+    norm_claim = " ".join(unicodedata.normalize("NFKC", claim_text).split()).rstrip(".!?")
+    for sentence in sentences:
+        norm_sent = " ".join(unicodedata.normalize("NFKC", sentence).split()).rstrip(".!?")
+        if claim_text in sentence or (norm_claim and norm_claim in norm_sent):
+            return sentence
+    return None
 
 
 def validate_semantic_assessment(

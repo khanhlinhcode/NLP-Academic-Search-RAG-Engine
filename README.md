@@ -159,6 +159,18 @@ Bảng dưới đây ghi nhận kết quả tổng hợp qua **3 lần chạy đ
 > 3. Sự tồn tại của trích dẫn nguyên văn chứng minh văn bản có xuất hiện trong tài liệu, nhưng không đồng nghĩa với suy luận ngữ nghĩa (semantic entailment) hoàn hảo ngoài đời thực.
 > 4. Thời gian kiểm định (0.1–0.3 ms) chỉ đo lường thuật toán kiểm tra chuỗi trên Python local, không bao gồm thời gian gọi API LLM sinh câu trả lời.
 
+### RAG Question Answering Reliability
+
+Để đảm bảo tính tin cậy tuyệt đối khi chuyển giao câu trả lời đến người dùng, pipeline RAG tuân thủ các nguyên tắc thiết kế khắt khe:
+
+1. **Model Readiness & Safe Fallback**: Hệ thống nhận diện chính xác model cấu hình. Môi trường Production tuyệt đối không tự động thay đổi model. Tại Local, fallback chỉ kích hoạt khi được bật tường minh (`ALLOW_MODEL_FALLBACK=true`), chỉ chọn các model đã cài đặt thuộc danh mục cho phép, và phản hồi metadata luôn ghi nhận model thực tế được sử dụng.
+2. **Citation Parsing & Claim Attachment**: Parser bảo toàn các trích dẫn đặt trước hoặc sau dấu chấm câu (`. [1]`, `[1, 2]`), số thập phân (`1.5`), viết tắt học thuật (`et al.`, `e.g.`), và dấu câu tiếng Việt mà không làm đứt đoạn câu hay gắn sai factual claim.
+3. **Evidence Verification & Anti-Leaking**: Prompt loại bỏ hoàn toàn các câu ví dụ thô để tránh hiện tượng mô hình nhỏ ($\le 7\text{B}$) sao chép câu mẫu khi nhận truy vấn tiếng Việt hoặc đa ngữ.
+4. **Controlled Bounded Repair**: Khi một câu trả lời nháp thiếu trích dẫn hoặc chứa claim chưa được chứng thực, hệ thống kích hoạt tối đa 1 lượt sửa chữa có ràng buộc (1-pass repair) kèm feedback chi tiết từ validator.
+5. **Fail-Closed Refusal**: Nếu bản sửa chữa vẫn không vượt qua kiểm định bằng chứng, hệ thống thay thế toàn bộ bằng thông báo từ chối chuẩn (`"Not enough verified evidence in the retrieved sources."`), không bao giờ để lộ câu trả lời nháp chưa xác minh lên giao diện người dùng.
+6. **Actionable Diagnostics**: Giao diện UI phân định rõ ràng các trạng thái: thiếu bằng chứng truy xuất, nhà cung cấp LLM chưa sẵn sàng, model chưa tải về, timeout, hoặc vượt quota mà không làm lộ token/secrets.
+7. **Comprehensive Regression Suite**: Toàn bộ các ca biên (12 citation edge cases, Ollama fallback, UI diagnostics, SSE stream integrity) được bảo vệ bởi bộ kiểm thử tự động gồm 265 unit & security tests và 13 integration tests.
+
 ### Runtime and Resource Profiling
 
 Các thông số tài nguyên thực tế được đo đạc độc lập trên Apple M1:

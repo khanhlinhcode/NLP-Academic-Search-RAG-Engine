@@ -75,11 +75,22 @@ def segment_sentences(answer: str) -> list[str]:
 
     sentences: list[str] = []
     normalized = answer.replace("\r\n", "\n").replace("\r", "\n")
-    for raw_line in normalized.split("\n"):
-        line = raw_line.strip()
-        if not line:
+    raw_lines = normalized.split("\n")
+    merged_lines: list[str] = []
+    for rl in raw_lines:
+        stripped = rl.strip()
+        if not stripped:
             continue
+        if merged_lines and re.fullmatch(r"(?:\[(?:\d+\s*,\s*)*\d+\]\s*)+", stripped):
+            merged_lines[-1] = merged_lines[-1] + " " + stripped
+        else:
+            merged_lines.append(stripped)
+
+    for line in merged_lines:
         protected = _protect_periods(line)
+        protected = re.sub(
+            r"([.!?])\s*((?:\[(?:\d+\s*,\s*)*\d+\])+)\.?(\s*)", r" \2\1\3", protected
+        )
         for part in re.split(r"(?<=[.!?])\s+", protected):
             restored = part.replace(_PRIVATE_DOT, ".").strip()
             if restored:
@@ -105,7 +116,7 @@ def _is_factual_sentence(sentence: str) -> bool:
     without_citations = _CITATION.sub("", content)
     without_markup = re.sub(r"[`*_>#]", "", without_citations).strip()
     words = _WORD.findall(without_markup)
-    if len(words) < 3:
+    if len(words) < 2:
         return False
     if without_markup.endswith(":") and len(words) <= 6:
         return False

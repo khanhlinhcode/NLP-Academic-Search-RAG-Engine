@@ -517,6 +517,8 @@ def render_saved_answer(entry: dict) -> None:
 
 def verification_failure_detail(metadata: dict) -> str:
     """Return actionable copy without exposing provider response details."""
+    if metadata.get("answer_status") == "refused_insufficient_context":
+        return "No indexed paper met the evidence threshold for this question"
     reason = metadata.get("failure_reason")
     if not isinstance(reason, str):
         reason = None
@@ -627,14 +629,26 @@ def render_ask(client: AcademicSearchClient, health: dict | None) -> None:
             and health.get("verification_required")
             and not health.get("verification_available")
         )
-        unavailable_detail = (
-            "Question answering is withheld because semantic verification is required but its "
-            "provider is unavailable. Search remains available; verify the verifier model and "
-            "provider quota."
-            if verification_blocked
-            else "Question answering is unavailable because the configured generation provider "
-            "is not ready. Search remains available; verify the provider key, model and quota."
-        )
+        provider = (health or {}).get("providers", {}).get("generation", "generation")
+        configured_model = (health or {}).get("models", {}).get("llm", "configured model")
+        if verification_blocked:
+            unavailable_detail = (
+                "Question answering is withheld because semantic verification is required but its "
+                "provider is unavailable. Search remains available; verify the verifier model and "
+                "provider quota."
+            )
+        elif health and not health.get("generation_available", health.get("ollama_available")):
+            unavailable_detail = (
+                f"Question answering is unavailable because the configured {provider} model "
+                f"'{configured_model}' is not ready or not installed. "
+                "Search remains available; verify provider connection, pull the model (e.g. `ollama pull "
+                f"{configured_model}`), or configure an installed model."
+            )
+        else:
+            unavailable_detail = (
+                "Question answering is unavailable because the configured generation provider "
+                "is not ready. Search remains available; verify the provider key, model and quota."
+            )
         st.info(
             unavailable_detail,
             icon=None,

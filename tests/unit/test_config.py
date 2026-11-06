@@ -28,6 +28,10 @@ def test_relative_data_paths_are_resolved_from_runtime_root():
         ({"search_candidate_pool": 2, "default_top_k": 10}, "must be"),
         ({"llm_model_name": " "}, "must not be empty"),
         ({"environment": "production", "cors_origins": "*"}, "cannot contain"),
+        (
+            {"environment": "production", "allow_model_fallback": True},
+            "cannot be enabled in production",
+        ),
         ({"embedding_device": "metal"}, "Input should be"),
         ({"embedding_native_threads": 0}, "greater than or equal"),
     ],

@@ -324,3 +324,113 @@ def test_deterministic_rag_metrics():
     )
     assert metrics["context_recall"] == 1.0
     assert metrics["citation_precision"] == 1.0
+
+
+def test_sentence_segmentation_preserves_post_punctuation_citations():
+    answer = "We propose the Transformer, based solely on attention mechanisms. [1]"
+    segments = segment_sentences(answer)
+    assert len(segments) == 1
+    assert "[1]" in segments[0]
+    validation = validate_citations(answer, 1)
+    assert validation.valid is True
+    assert validation.uncited_claim_count == 0
+    assert validation.claim_citation_coverage == 1.0
+    assert validation.cited_indices == [1]
+
+
+def test_post_period_multi_sentence_citations_remain_attached():
+    answer = (
+        "The first model relies entirely on multi-head attention. [1]\n"
+        "The second approach replaces recurrent layers with positional encodings. [2]"
+    )
+    segments = segment_sentences(answer)
+    assert len(segments) == 2
+    assert "[1]" in segments[0]
+    assert "[2]" in segments[1]
+    validation = validate_citations(answer, 2)
+    assert validation.valid is True
+    assert validation.uncited_claim_count == 0
+    assert validation.claim_citation_coverage == 1.0
+    assert validation.cited_indices == [1, 2]
+
+
+def test_ollama_generator_model_fallback_when_default_unpulled():
+    class DummyModelList:
+        def __init__(self, names):
+            self.models = [type("M", (), {"model": n})() for n in names]
+
+    class FakeOllamaClient:
+        def list(self):
+            return DummyModelList(["qwen2.5:1.5b"])
+
+    # 1. Default: fallback disabled -> returns False
+    strict_generator = RAGGenerator(model_name="qwen2.5:7b", client=FakeOllamaClient())
+    assert strict_generator.is_available() is False
+    assert strict_generator.model_name == "qwen2.5:7b"
+
+    # 2. Explicit fallback allowed -> adopts compatible installed model
+    fallback_generator = RAGGenerator(
+        model_name="qwen2.5:7b", client=FakeOllamaClient(), allow_fallback=True
+    )
+    assert fallback_generator.is_available() is True
+    assert fallback_generator.model_name == "qwen2.5:1.5b"
+
+
+def test_citation_validation_twelve_edge_cases():
+    # User-specified required baseline inputs
+    assert validate_citations("Claim supported [1].", 1).valid is True
+    assert validate_citations("Claim supported. [1]", 1).valid is True
+    assert validate_citations("Claim supported. [1, 2]", 2).valid is True
+    assert validate_citations("First claim [1]. Second claim [2].", 2).valid is True
+    assert validate_citations("First claim. [1] Second claim. [2]", 2).valid is True
+    assert validate_citations("Smith et al. [1] reported the result.", 1).valid is True
+    assert validate_citations("The value was 3.14 [1].", 1).valid is True
+    assert validate_citations("- First bullet. [1]", 1).valid is True
+    assert validate_citations("- Second bullet [2].", 2).valid is True
+    c_unsupported = validate_citations("Unsupported claim. Valid claim [1].", 1)
+    assert c_unsupported.valid is False
+    assert c_unsupported.uncited_claim_count == 1
+
+    # Additional edge cases: separate line, parentheses, decimals, Vietnamese, invalid/malformed
+    assert validate_citations("Valid claim on line one.\n[1]", 1).valid is True
+    assert (
+        validate_citations("This finding is corroborated by recent work (see [1]).", 1).valid
+        is True
+    )
+    assert (
+        validate_citations(
+            "The reported accuracy was 95.5. [1] Follow-up study showed 98.2. [2]", 2
+        ).valid
+        is True
+    )
+    assert (
+        validate_citations(
+            "Mô hình Transformer cải thiện hiệu năng. [1] Kết quả vượt trội. [2]", 2
+        ).valid
+        is True
+    )
+    c_invalid = validate_citations("Hybrid retrieval improves coverage [99].", 1)
+    assert c_invalid.valid is False
+    assert c_invalid.invalid_indices == [99]
+    c_malformed = validate_citations(
+        "Sentence one with malformed [] and [abc] has no valid citations.", 1
+    )
+    assert c_malformed.valid is False
+    assert c_malformed.uncited_claim_count == 1
+
+
+def test_prompt_rubric_delimiters_prevent_example_leakage(papers):
+    package = build_rag_messages("Mô hình Transformer dựa trên cơ chế gì?", papers[:1])
+    system_content = package.messages[0]["content"]
+    assert "<illustrative_rubric>" in system_content
+    assert "</illustrative_rubric>" in system_content
+    assert "Format compliance guidelines" in system_content
+    assert "Citation non-compliant" in system_content
+    assert "Citation compliant" in system_content
+
+
+def test_ui_verification_failure_detail_handles_insufficient_context():
+    from nlp_academic_search.ui.app import verification_failure_detail
+
+    msg = verification_failure_detail({"answer_status": "refused_insufficient_context"})
+    assert msg == "No indexed paper met the evidence threshold for this question"

@@ -16,6 +16,18 @@ from nlp_academic_search.providers.generation.base import (
     RAGGenerationError,
 )
 
+ALLOWED_FALLBACK_MODELS: frozenset[str] = frozenset(
+    {
+        "qwen2.5:0.5b",
+        "qwen2.5:1.5b",
+        "qwen2.5:3b",
+        "qwen2.5:7b",
+        "qwen2.5:14b",
+        "qwen2.5:latest",
+        "qwen2.5",
+    }
+)
+
 
 class RAGGenerator:
     def __init__(
@@ -24,6 +36,7 @@ class RAGGenerator:
         *,
         client: Any | None = None,
         async_transport: httpx.AsyncBaseTransport | None = None,
+        allow_fallback: bool | None = None,
     ) -> None:
         import ollama
 
@@ -33,6 +46,11 @@ class RAGGenerator:
         self.timeout_seconds = settings.ollama.timeout_seconds
         self.async_transport = async_transport
         self.client = client or ollama.Client(host=self.base_url, timeout=self.timeout_seconds)
+        self.allow_fallback = (
+            allow_fallback
+            if allow_fallback is not None
+            else (settings.allow_model_fallback and settings.environment != "production")
+        )
 
     def _map_error(self, exc: Exception) -> RAGGenerationError:
         if isinstance(exc, (httpx.TimeoutException, TimeoutError)):
@@ -139,9 +157,24 @@ class RAGGenerator:
         try:
             models = self.client.list()
             names = [getattr(model, "model", "") for model in models.models]
-            return any(
+            if any(
                 self.model_name == name or name.startswith(f"{self.model_name}:") for name in names
-            )
+            ):
+                return True
+            if self.allow_fallback and settings.environment != "production":
+                prefix = self.model_name.split(":")[0]
+                fallback = next(
+                    (
+                        name
+                        for name in names
+                        if name in ALLOWED_FALLBACK_MODELS and name.startswith(prefix)
+                    ),
+                    None,
+                )
+                if fallback:
+                    self.model_name = fallback
+                    return True
+            return False
         except Exception:
             return False
 
