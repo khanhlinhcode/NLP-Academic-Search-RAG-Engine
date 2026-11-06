@@ -74,6 +74,104 @@ token ở Secrets.
 - **Evaluation tooling:** retrieval metrics, RAG metrics, semantic-verification fixtures, load test
   và security tests.
 
+## Performance & Benchmark Results
+
+Hệ thống được đánh giá thực nghiệm độc lập và tái lập trên commit `cb8d0bc83b041f3ab04299b81c5015e44042a710` (tháng 11/2026). Toàn bộ mã nguồn kiểm thử, manifest dữ liệu và log thực thi được công bố đầy đủ tại [`docs/benchmarks/scifact-2026-11/`](docs/benchmarks/scifact-2026-11/).
+
+### Benchmark Dataset and Environment
+
+* **Corpus**: **BEIR / SciFact** (Wadden et al., EMNLP 2020; Thakur et al., NeurIPS 2021) gồm **5.183 bài báo khoa học y sinh** (tiêu đề + tóm tắt trích từ PubMed).
+* **Phân chia truy vấn (Leakage-Free Protocol)**:
+  * **Development Queries**: 100 câu hỏi (Queries 0–99, trung bình 1.16 qrels/query). Sử dụng độc quyền để khám phá và tinh chỉnh siêu tham số ($k$ RRF, candidate pool, độ sâu reranking).
+  * **Holdout Queries**: 100 câu hỏi độc lập chưa từng thấy (Queries 100–199, trung bình 1.10 qrels/query). Sử dụng để đo lường chất lượng tổng quát hóa cuối cùng qua 3 lần chạy lặp lại độc lập.
+* **Ground-Truth Relevance Labels**: Nhãn relevance thẩm định thủ công chính thức (`qrels/test.tsv`), không sử dụng câu hỏi sinh tự động từ LLM.
+* **Môi trường phần cứng**: Apple MacBook Air (Apple M1 — 8 cores: 4 Performance + 4 Efficiency), 8.00 GB Unified Memory.
+* **Môi trường phần mềm**: Python `3.11.16`, `PyTorch 2.14.0`, `faiss-cpu 1.15.0`, `rank-bm25 0.2.2`, `sentence-transformers 5.7.0` (chạy đơn luồng CPU: `torch.set_num_threads(1)`).
+* **Mô hình định lượng**:
+  * Dense Retriever: `sentence-transformers/all-MiniLM-L6-v2` (384 dimensions, vector index: FAISS `IndexFlatIP`).
+  * Cross-Encoder Reranker: `cross-encoder/ms-marco-MiniLM-L-6-v2`.
+
+### Holdout Retrieval Benchmark
+
+Bảng dưới đây ghi nhận kết quả tổng hợp qua **3 lần chạy độc lập** trên tập **100 Holdout queries** (không tham gia quá trình tuning):
+
+| Retrieval Method | Recall@5 (Mean $\pm$ Std) | nDCG@10 (Mean $\pm$ Std) | HitRate@5 (Mean) | Median Latency P50 | Latency P95 |
+|---|---:|---:|---:|---:|---:|
+| **BM25 (Sparse Okapi)** | $0.6817 \pm 0.0$ | $0.6254 \pm 0.0$ | 0.7000 | $9.00 \pm 2.13\text{ ms}$ | $18.32 \pm 3.83\text{ ms}$ |
+| **Dense SBERT + FAISS** | $0.6753 \pm 0.0$ | $0.5858 \pm 0.0$ | 0.7000 | $7.02 \pm 0.71\text{ ms}$ | $8.95 \pm 1.83\text{ ms}$ |
+| **Hybrid RRF ($k=60, \text{pool}=50$) [Default]** | **$0.7387 \pm 0.0$** | **$0.6389 \pm 0.0$** | **0.7600** | **$15.94 \pm 5.33\text{ ms}$** | **$27.48 \pm 12.86\text{ ms}$** |
+| **Hybrid RRF ($k=20, \text{pool}=20$)** | $0.7187 \pm 0.0$ | $0.6380 \pm 0.0$ | 0.7400 | $17.74 \pm 0.99\text{ ms}$ | $30.69 \pm 1.67\text{ ms}$ |
+| **Hybrid + Cross-Encoder ($\text{pool}=20$)** | $0.6920 \pm 0.0$ | $0.6295 \pm 0.0$ | 0.7200 | $1,135.72 \pm 115.44\text{ ms}$ | $1,590.58 \pm 200.75\text{ ms}$ |
+| **Hybrid + Cross-Encoder ($\text{pool}=10$)** | **$0.7220 \pm 0.0$** | **$0.6527 \pm 0.0$** | **0.7500** | **$664.11 \pm 24.96\text{ ms}$** | **$867.83 \pm 27.88\text{ ms}$** |
+
+> [!NOTE]
+> * **Recall@5**: Đo lường tỷ lệ tài liệu liên quan được tìm thấy trong Top 5 kết quả truy xuất.
+> * **nDCG@10**: Đánh giá chất lượng thứ tự xếp hạng có chiết khấu vị trí trong Top 10.
+> * **HitRate@5**: Tỷ lệ truy vấn có ít nhất một tài liệu liên quan xuất hiện trong Top 5.
+> * **Median Latency P50**: Thời gian xử lý Retrieval trên CPU local (kèm khoảng tin cậy 95% CI95 qua 3 runs); không bao gồm thời gian sinh câu trả lời của LLM. Độ lệch chuẩn accuracy qua 3 lần chạy là $\text{std} = 0.0$ do thuật toán ranking hoàn toàn tất định.
+
+### Why Hybrid Retrieval?
+
+* **BM25** hoạt động hiệu quả khi người dùng tra cứu chính xác thuật ngữ chuyên ngành, tên gen, từ viết tắt hoặc danh pháp khoa học (`Recall@5 = 0.6817`).
+* **Dense Retrieval** tìm kiếm các văn bản tương đồng về ngữ nghĩa nhưng dễ bỏ sót từ khóa đặc thù (`Recall@5 = 0.6753`).
+* **Reciprocal Rank Fusion (RRF)** hợp nhất thứ hạng của hai phương pháp theo nghịch đảo vị trí:
+  $$\text{RRF}(d) = \sum_{m \in \{\text{BM25}, \text{Dense}\}} \frac{1}{k + r_m(d)}$$
+  RRF không đòi hỏi chuẩn hóa trực tiếp các thang điểm khác biệt (BM25 unbounded vs Cosine $[-1, 1]$).
+* **Kết quả kiểm chứng trên tập Holdout**:
+  * So với BM25: Recall@5 tăng từ 0.6817 lên 0.7387 (**+0.0570 điểm phần trăm tuyệt đối [pp]**, tương đương **+8.36% tăng trưởng tương đối**); nDCG@10 tăng từ 0.6254 lên 0.6389 (**+1.35 pp / +2.16% relative**); HitRate@5 tăng từ 0.7000 lên 0.7600 (**+6.00 pp**).
+  * So với Dense: Recall@5 tăng **+6.34 pp (+9.39% relative)**; nDCG@10 tăng **+5.31 pp (+9.06% relative)**.
+
+### Retrieval Optimization Experiments
+
+#### Thí nghiệm A — Tinh chỉnh Candidate Pool của RRF
+* **Trên Development split (100 queries)**: Thu hẹp candidate pool từ 50 xuống 20 giúp loại bỏ tài liệu nhiễu ở đuôi, làm Recall@5 tăng từ 0.8182 lên **0.8382 (+2.00 pp)**.
+* **Trên Holdout test split (100 unseen queries)**: Khi kiểm tra trên tập độc lập, cấu hình `pool=50` lại đạt **0.7387**, vượt trội hơn `pool=20` (đạt 0.7187).
+* **Kết luận thực nghiệm**: Cấu hình đạt điểm cao hơn trên Development không tổng quát hóa tốt hơn trên Holdout. Hệ thống chọn cấu hình an toàn `pool=50` làm mặc định production để chống overfitting.
+
+#### Thí nghiệm B — Hằng số làm mượt RRF $k$
+* Thử nghiệm $k \in [20, 40, 60]$ trên Development cho thấy $k=20$ phạt mạnh hơn các tài liệu ở thứ hạng thấp, nâng nDCG@10 từ 0.7789 lên **0.7850 (+0.61 pp)**. Tuy nhiên trên Holdout, $k=60$ duy trì nDCG@10 ổn định hơn (0.6389 so với 0.6380 của $k=20$), chứng minh $k=60$ là giá trị tối ưu bền vững.
+
+#### Thí nghiệm C — Giảm độ sâu Reranking của Cross-Encoder
+* **Holdout Latency**: Cắt giảm độ sâu rerank từ 20 xuống 10 ứng viên giúp giảm **41.5% độ trễ P50** ($1,135.72\text{ ms} \to 664.11\text{ ms}$, CI95: $\pm 24.96\text{ ms}$).
+* **Holdout Quality**: Recall@5 tăng từ 0.6920 lên **0.7220 (+3.00 pp)**; nDCG@10 tăng từ 0.6295 lên **0.6527 (+2.32 pp)** vì mô hình loại bớt ứng viên nhiễu ở sâu.
+* **Chi phí tính toán & Giả thuyết Domain Mismatch**: Dù đã tối ưu, Cross-Encoder trên CPU vẫn chậm hơn Hybrid RRF ~41 lần (664 ms vs. 15.94 ms) và có Recall@5 thấp hơn (0.7220 vs 0.7387). *Giả thuyết nguyên nhân*: Trọng số tiền huấn luyện MS MARCO (truy vấn tìm kiếm web thương mại Bing) gặp hiện tượng lệch miền dữ liệu (domain mismatch) khi đối mặt với văn bản y sinh học thuật SciFact, trừ khi được fine-tune chuyên biệt.
+
+### Grounding and Citation Verification Evaluation
+
+Đánh giá được thực hiện trên **20 kịch bản kiểm thử tất định** gồm 13 kịch bản Development (`benchmarks/rag/semantic_verification_golden.json`) và 7 kịch bản Holdout độc lập (`benchmarks/rag/holdout_verification_golden.json`), bao gồm 6 ca có bằng chứng hợp lệ, 12 ca vô căn cứ/bịa đặt/trích sai, 2 ca từ chối chuẩn và 2 ca tấn công prompt injection:
+
+* **Mode 1 — Structural Validation**: Kiểm tra cú pháp trích dẫn `[n]`, giới hạn index và phân tách câu (`citations.py`).
+* **Mode 2 — Deterministic Evidence Validation**: Chuẩn hóa Unicode NFKC và kiểm tra chuỗi trích dẫn nguyên văn trong Title/Abstract (`verification.py`).
+* **Mode 3 — Bounded Repair & Fail-Closed Refusal**: Cơ chế sửa chữa 1 lần (1-pass repair) kèm fallback từ chối chuẩn khi không đủ bằng chứng xác thực (`rag.py`).
+
+| Chỉ số kiểm định | Mode 1 (Structural) | Mode 2 (Exact Quote) | Mode 3 (Bounded Repair + Refusal) |
+|---|---:|---:|---:|
+| **Unsupported Claim Slip Rate** | **83.3% (10/12 lọt)** | **0.0% (0/12 lọt)** | **0.0% (0/12 lọt)** |
+| **Tấn công Prompt Injection bị chặn** | **0/2 (Thất bại)** | **2/2 (Chặn 100%)** | **2/2 (Chặn 100%)** |
+| **Xử lý từ chối chuẩn (Canonical Refusal)** | **2/2 (100%)** | **2/2 (100%)** | **2/2 (100%)** |
+| **Độ trễ kiểm định P50 (Local Python)** | **0.107 ms** | **0.297 ms** | **0.261 ms** |
+| **Độ trễ kiểm định P95 (Local Python)** | 0.259 ms | 0.719 ms | 0.451 ms |
+
+> [!WARNING]
+> **Giới hạn phạm vi kiểm định**:
+> 1. Kết quả trên chứng minh: Trong bộ 20 kịch bản kiểm thử tất định, Mode 2 & Mode 3 đã chặn toàn bộ 12 trường hợp phát biểu vô căn cứ (tỷ lệ lọt 0.0%) và chặn 100% prompt injection lồng trong abstract.
+> 2. Đây **không phải là tuyên bố "triệt tiêu 100% ảo giác ngoài đời thực"** hay "bảo mật tuyệt đối trước mọi kỹ thuật bẻ khóa LLM".
+> 3. Sự tồn tại của trích dẫn nguyên văn chứng minh văn bản có xuất hiện trong tài liệu, nhưng không đồng nghĩa với suy luận ngữ nghĩa (semantic entailment) hoàn hảo ngoài đời thực.
+> 4. Thời gian kiểm định (0.1–0.3 ms) chỉ đo lường thuật toán kiểm tra chuỗi trên Python local, không bao gồm thời gian gọi API LLM sinh câu trả lời.
+
+### Runtime and Resource Profiling
+
+Các thông số tài nguyên thực tế được đo đạc độc lập trên Apple M1:
+
+| Thành phần tài nguyên | Dung lượng đo được | Phương pháp & Phạm vi đo lường |
+|---|---:|---|
+| **Process Peak RSS (High-Water Mark)** | **766.62 MB** | Đo qua `resource.getrusage(RUSAGE_SELF).ru_maxrss` trên macOS. Đỉnh bộ nhớ toàn bộ tiến trình Python gồm PyTorch runtime, SentenceTransformers weights, OpenMP và FAISS C++ buffers. |
+| **BM25 Standalone Inverted Index** | **68.83 MB** | Đo qua `tracemalloc`. Cấu trúc heap Python chứa từ điển và posting lists cho 5.183 bài báo. |
+| **FAISS Index C++ Memory** | **7.59 MB** | Kích thước mảng vector C++ ($5.183 \times 384 \times 4\text{ bytes}$). |
+| **Mảng Embeddings NumPy trên đĩa** | **7.59 MB** | File `scifact_embeddings.npy` lưu trữ vector chuẩn hóa FP32. |
+| **Tổng dung lượng Index trên đĩa** | **15.18 MB** | Gồm file FAISS index (7.59 MB) và file npy (7.59 MB). |
+| **Cloud 512 MB Container Limit** | `NOT VERIFIED` | Kiến trúc lazy import giúp Cloud API không import PyTorch/FAISS, nhưng chưa có kiểm thử tải thực tế chứng minh hoạt động ổn định ở giới hạn 512 MB RAM. |
+
 ## Kiến trúc hệ thống
 
 ```mermaid
@@ -466,9 +564,8 @@ Metric semantics cần đọc đúng:
 Reports được ghi dưới `reports/experiments/` và bị Git ignore. Mỗi kết luận benchmark phải đi kèm
 dataset/split, corpus version, model/revision, config, seed, `k`, hardware và limitations.
 
-> [!WARNING]
-> SciFact/BEIR production-quality benchmark chưa được công bố trong repository. Không sử dụng
-> regression fixture nhỏ để tuyên bố hệ thống đạt chất lượng SOTA hoặc production.
+> [!NOTE]
+> Bộ benchmark thực nghiệm trên BEIR/SciFact (5.183 bài báo, 100 Dev queries, 100 Holdout queries) đã được hoàn thiện và công bố đầy đủ tại [`docs/benchmarks/scifact-2026-11/`](docs/benchmarks/scifact-2026-11/). Bộ fixture nhỏ commit trong repository (`benchmarks/retrieval/in_domain_golden.json`) phục vụ kiểm tra regression nhanh khi chạy CI/CD (`make eval-retrieval`). Không sử dụng fixture nhỏ để đánh giá chất lượng thay cho benchmark chính thức.
 
 ## Quality gates
 

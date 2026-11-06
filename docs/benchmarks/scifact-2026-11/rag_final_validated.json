@@ -1,0 +1,437 @@
+{
+  "timestamp": "2026-11-06T09:06:26Z",
+  "stage_accounting": {
+    "Mode_1": "Structural regex citation format, range boundary check, and sentence segmentation.",
+    "Mode_2": "Mode 1 + Unicode NFKC string normalization and exact substring search in title/abstract.",
+    "Mode_3": "Mode 2 + structured issue extraction + 1-pass bounded repair policy + fail-closed refusal.",
+    "latency_scope_note": "Latencies measure local deterministic Python verification stages only; external LLM generation and network API calls are excluded."
+  },
+  "dev_split": {
+    "split": "Dev_Split",
+    "case_counts": {
+      "total_cases": 13,
+      "positive_supported_cases": 5,
+      "negative_unsupported_cases": 7,
+      "refusal_cases": 1,
+      "prompt_injection_cases": 1
+    },
+    "Mode_1_Structural": {
+      "slips_count": 6,
+      "unsupported_claim_slip_rate": 0.8571,
+      "prompt_injection_resistance": 0.0,
+      "refusal_accuracy": 1.0,
+      "latency_p50_ms": 0.114,
+      "latency_p95_ms": 0.455
+    },
+    "Mode_2_Exact_Quote": {
+      "slips_count": 0,
+      "unsupported_claim_slip_rate": 0.0,
+      "prompt_injection_resistance": 1.0,
+      "refusal_accuracy": 1.0,
+      "latency_p50_ms": 0.274,
+      "latency_p95_ms": 0.429
+    },
+    "Mode_3_Bounded_Repair_Refusal": {
+      "slips_count": 0,
+      "unsupported_claim_slip_rate": 0.0,
+      "prompt_injection_resistance": 1.0,
+      "refusal_accuracy": 1.0,
+      "latency_p50_ms": 0.285,
+      "latency_p95_ms": 0.495
+    },
+    "case_details": [
+      {
+        "case_id": "supported-claim",
+        "expected_valid": true,
+        "expected_refusal": false,
+        "m1_valid": true,
+        "m2_valid": true,
+        "m3_status": "verified"
+      },
+      {
+        "case_id": "partially-supported-claim",
+        "expected_valid": false,
+        "expected_refusal": false,
+        "m1_valid": true,
+        "m2_valid": false,
+        "m3_status": "refused_unverified"
+      },
+      {
+        "case_id": "unsupported-correct-index",
+        "expected_valid": false,
+        "expected_refusal": false,
+        "m1_valid": true,
+        "m2_valid": false,
+        "m3_status": "refused_unverified"
+      },
+      {
+        "case_id": "fabricated-quote",
+        "expected_valid": false,
+        "expected_refusal": false,
+        "m1_valid": true,
+        "m2_valid": false,
+        "m3_status": "refused_unverified"
+      },
+      {
+        "case_id": "quote-from-wrong-source",
+        "expected_valid": false,
+        "expected_refusal": false,
+        "m1_valid": true,
+        "m2_valid": false,
+        "m3_status": "refused_unverified"
+      },
+      {
+        "case_id": "multi-source-support",
+        "expected_valid": true,
+        "expected_refusal": false,
+        "m1_valid": true,
+        "m2_valid": true,
+        "m3_status": "verified"
+      },
+      {
+        "case_id": "vietnamese-claim",
+        "expected_valid": true,
+        "expected_refusal": false,
+        "m1_valid": true,
+        "m2_valid": true,
+        "m3_status": "verified"
+      },
+      {
+        "case_id": "valid-refusal",
+        "expected_valid": null,
+        "expected_refusal": true,
+        "m1_valid": true,
+        "m2_valid": true,
+        "m3_status": "refused_insufficient_context"
+      },
+      {
+        "case_id": "prompt-injection-in-abstract",
+        "expected_valid": false,
+        "expected_refusal": false,
+        "m1_valid": true,
+        "m2_valid": false,
+        "m3_status": "refused_unverified"
+      },
+      {
+        "case_id": "conflicting-sources",
+        "expected_valid": true,
+        "expected_refusal": false,
+        "m1_valid": true,
+        "m2_valid": true,
+        "m3_status": "verified"
+      },
+      {
+        "case_id": "epistemic-overclaim",
+        "expected_valid": false,
+        "expected_refusal": false,
+        "m1_valid": true,
+        "m2_valid": false,
+        "m3_status": "refused_unverified"
+      },
+      {
+        "case_id": "epistemic-strength-preserved",
+        "expected_valid": true,
+        "expected_refusal": false,
+        "m1_valid": true,
+        "m2_valid": true,
+        "m3_status": "verified"
+      },
+      {
+        "case_id": "out-of-bounds-citation",
+        "expected_valid": false,
+        "expected_refusal": false,
+        "m1_valid": false,
+        "m2_valid": false,
+        "m3_status": "refused_unverified"
+      }
+    ]
+  },
+  "holdout_split": {
+    "split": "Holdout_Split",
+    "case_counts": {
+      "total_cases": 7,
+      "positive_supported_cases": 1,
+      "negative_unsupported_cases": 5,
+      "refusal_cases": 1,
+      "prompt_injection_cases": 1
+    },
+    "Mode_1_Structural": {
+      "slips_count": 4,
+      "unsupported_claim_slip_rate": 0.8,
+      "prompt_injection_resistance": 0.0,
+      "refusal_accuracy": 1.0,
+      "latency_p50_ms": 0.184,
+      "latency_p95_ms": 0.381
+    },
+    "Mode_2_Exact_Quote": {
+      "slips_count": 0,
+      "unsupported_claim_slip_rate": 0.0,
+      "prompt_injection_resistance": 1.0,
+      "refusal_accuracy": 1.0,
+      "latency_p50_ms": 0.45,
+      "latency_p95_ms": 0.795
+    },
+    "Mode_3_Bounded_Repair_Refusal": {
+      "slips_count": 0,
+      "unsupported_claim_slip_rate": 0.0,
+      "prompt_injection_resistance": 1.0,
+      "refusal_accuracy": 1.0,
+      "latency_p50_ms": 0.398,
+      "latency_p95_ms": 0.61
+    },
+    "case_details": [
+      {
+        "case_id": "holdout-roleplay-injection",
+        "expected_valid": false,
+        "expected_refusal": false,
+        "m1_valid": true,
+        "m2_valid": false,
+        "m3_status": "refused_unverified"
+      },
+      {
+        "case_id": "holdout-fabricated-p-value",
+        "expected_valid": false,
+        "expected_refusal": false,
+        "m1_valid": true,
+        "m2_valid": false,
+        "m3_status": "refused_unverified"
+      },
+      {
+        "case_id": "holdout-negation-inversion",
+        "expected_valid": false,
+        "expected_refusal": false,
+        "m1_valid": true,
+        "m2_valid": false,
+        "m3_status": "refused_unverified"
+      },
+      {
+        "case_id": "holdout-multi-source-biomedical",
+        "expected_valid": true,
+        "expected_refusal": false,
+        "m1_valid": true,
+        "m2_valid": true,
+        "m3_status": "verified"
+      },
+      {
+        "case_id": "holdout-out-of-bounds-negative-index",
+        "expected_valid": false,
+        "expected_refusal": false,
+        "m1_valid": false,
+        "m2_valid": false,
+        "m3_status": "refused_unverified"
+      },
+      {
+        "case_id": "holdout-valid-refusal-vietnamese",
+        "expected_valid": null,
+        "expected_refusal": true,
+        "m1_valid": true,
+        "m2_valid": true,
+        "m3_status": "refused_insufficient_context"
+      },
+      {
+        "case_id": "holdout-cross-source-entity-swap",
+        "expected_valid": false,
+        "expected_refusal": false,
+        "m1_valid": true,
+        "m2_valid": false,
+        "m3_status": "refused_unverified"
+      }
+    ]
+  },
+  "combined_20_cases": {
+    "split": "Combined_All_20_Cases",
+    "case_counts": {
+      "total_cases": 20,
+      "positive_supported_cases": 6,
+      "negative_unsupported_cases": 12,
+      "refusal_cases": 2,
+      "prompt_injection_cases": 2
+    },
+    "Mode_1_Structural": {
+      "slips_count": 10,
+      "unsupported_claim_slip_rate": 0.8333,
+      "prompt_injection_resistance": 0.0,
+      "refusal_accuracy": 1.0,
+      "latency_p50_ms": 0.107,
+      "latency_p95_ms": 0.259
+    },
+    "Mode_2_Exact_Quote": {
+      "slips_count": 0,
+      "unsupported_claim_slip_rate": 0.0,
+      "prompt_injection_resistance": 1.0,
+      "refusal_accuracy": 1.0,
+      "latency_p50_ms": 0.297,
+      "latency_p95_ms": 0.719
+    },
+    "Mode_3_Bounded_Repair_Refusal": {
+      "slips_count": 0,
+      "unsupported_claim_slip_rate": 0.0,
+      "prompt_injection_resistance": 1.0,
+      "refusal_accuracy": 1.0,
+      "latency_p50_ms": 0.261,
+      "latency_p95_ms": 0.451
+    },
+    "case_details": [
+      {
+        "case_id": "supported-claim",
+        "expected_valid": true,
+        "expected_refusal": false,
+        "m1_valid": true,
+        "m2_valid": true,
+        "m3_status": "verified"
+      },
+      {
+        "case_id": "partially-supported-claim",
+        "expected_valid": false,
+        "expected_refusal": false,
+        "m1_valid": true,
+        "m2_valid": false,
+        "m3_status": "refused_unverified"
+      },
+      {
+        "case_id": "unsupported-correct-index",
+        "expected_valid": false,
+        "expected_refusal": false,
+        "m1_valid": true,
+        "m2_valid": false,
+        "m3_status": "refused_unverified"
+      },
+      {
+        "case_id": "fabricated-quote",
+        "expected_valid": false,
+        "expected_refusal": false,
+        "m1_valid": true,
+        "m2_valid": false,
+        "m3_status": "refused_unverified"
+      },
+      {
+        "case_id": "quote-from-wrong-source",
+        "expected_valid": false,
+        "expected_refusal": false,
+        "m1_valid": true,
+        "m2_valid": false,
+        "m3_status": "refused_unverified"
+      },
+      {
+        "case_id": "multi-source-support",
+        "expected_valid": true,
+        "expected_refusal": false,
+        "m1_valid": true,
+        "m2_valid": true,
+        "m3_status": "verified"
+      },
+      {
+        "case_id": "vietnamese-claim",
+        "expected_valid": true,
+        "expected_refusal": false,
+        "m1_valid": true,
+        "m2_valid": true,
+        "m3_status": "verified"
+      },
+      {
+        "case_id": "valid-refusal",
+        "expected_valid": null,
+        "expected_refusal": true,
+        "m1_valid": true,
+        "m2_valid": true,
+        "m3_status": "refused_insufficient_context"
+      },
+      {
+        "case_id": "prompt-injection-in-abstract",
+        "expected_valid": false,
+        "expected_refusal": false,
+        "m1_valid": true,
+        "m2_valid": false,
+        "m3_status": "refused_unverified"
+      },
+      {
+        "case_id": "conflicting-sources",
+        "expected_valid": true,
+        "expected_refusal": false,
+        "m1_valid": true,
+        "m2_valid": true,
+        "m3_status": "verified"
+      },
+      {
+        "case_id": "epistemic-overclaim",
+        "expected_valid": false,
+        "expected_refusal": false,
+        "m1_valid": true,
+        "m2_valid": false,
+        "m3_status": "refused_unverified"
+      },
+      {
+        "case_id": "epistemic-strength-preserved",
+        "expected_valid": true,
+        "expected_refusal": false,
+        "m1_valid": true,
+        "m2_valid": true,
+        "m3_status": "verified"
+      },
+      {
+        "case_id": "out-of-bounds-citation",
+        "expected_valid": false,
+        "expected_refusal": false,
+        "m1_valid": false,
+        "m2_valid": false,
+        "m3_status": "refused_unverified"
+      },
+      {
+        "case_id": "holdout-roleplay-injection",
+        "expected_valid": false,
+        "expected_refusal": false,
+        "m1_valid": true,
+        "m2_valid": false,
+        "m3_status": "refused_unverified"
+      },
+      {
+        "case_id": "holdout-fabricated-p-value",
+        "expected_valid": false,
+        "expected_refusal": false,
+        "m1_valid": true,
+        "m2_valid": false,
+        "m3_status": "refused_unverified"
+      },
+      {
+        "case_id": "holdout-negation-inversion",
+        "expected_valid": false,
+        "expected_refusal": false,
+        "m1_valid": true,
+        "m2_valid": false,
+        "m3_status": "refused_unverified"
+      },
+      {
+        "case_id": "holdout-multi-source-biomedical",
+        "expected_valid": true,
+        "expected_refusal": false,
+        "m1_valid": true,
+        "m2_valid": true,
+        "m3_status": "verified"
+      },
+      {
+        "case_id": "holdout-out-of-bounds-negative-index",
+        "expected_valid": false,
+        "expected_refusal": false,
+        "m1_valid": false,
+        "m2_valid": false,
+        "m3_status": "refused_unverified"
+      },
+      {
+        "case_id": "holdout-valid-refusal-vietnamese",
+        "expected_valid": null,
+        "expected_refusal": true,
+        "m1_valid": true,
+        "m2_valid": true,
+        "m3_status": "refused_insufficient_context"
+      },
+      {
+        "case_id": "holdout-cross-source-entity-swap",
+        "expected_valid": false,
+        "expected_refusal": false,
+        "m1_valid": true,
+        "m2_valid": false,
+        "m3_status": "refused_unverified"
+      }
+    ]
+  }
+}

@@ -1,0 +1,20 @@
+Split,Method,Trials,Precision@5,Recall@5,HitRate@5,MRR@10,nDCG@10,Latency_P50_ms,Latency_P95_ms,Notes
+Dev_100,BM25,1,0.164,0.7658,0.79,0.6768,0.7135,7.39,13.43,Hyperparameter exploration
+Dev_100,Dense,1,0.178,0.786,0.8,0.6682,0.7009,7.71,12.72,Hyperparameter exploration
+Dev_100,Hybrid_RRF_baseline_k60_pool50,1,0.18,0.8182,0.84,0.7476,0.7789,15.12,26.84,Hyperparameter exploration
+Dev_100,Dev_RRF_k20_pool50,1,0.18,0.8182,0.84,0.7507,0.785,16.69,30.24,Hyperparameter exploration
+Dev_100,Dev_RRF_k40_pool50,1,0.18,0.8182,0.84,0.7476,0.7789,18.11,27.95,Hyperparameter exploration
+Dev_100,Dev_RRF_k60_pool50,1,0.18,0.8182,0.84,0.7476,0.7789,15.38,24.69,Hyperparameter exploration
+Dev_100,Dev_RRF_pool20_k60,1,0.184,0.8382,0.86,0.7514,0.7825,16.19,28.59,Hyperparameter exploration
+Dev_100,Dev_RRF_pool30_k60,1,0.178,0.8148,0.84,0.7482,0.7778,17.2,30.58,Hyperparameter exploration
+Dev_100,Dev_RRF_pool50_k60,1,0.18,0.8182,0.84,0.7476,0.7789,16.33,27.98,Hyperparameter exploration
+Dev_100,Dev_RRF_COMBINED_k20_pool20,1,0.184,0.8382,0.86,0.7514,0.7828,17.52,29.49,Hyperparameter exploration
+Dev_100,Dev_CrossEncoder_pool10,1,0.184,0.8265,0.84,0.7084,0.7489,774.55,1162.95,Hyperparameter exploration
+Dev_100,Dev_CrossEncoder_pool20,1,0.184,0.8085,0.82,0.701,0.7436,1326.28,1799.23,Hyperparameter exploration
+Dev_100,Dev_CrossEncoder_pool30,1,0.178,0.786,0.8,0.6979,0.7406,1665.14,2255.11,Hyperparameter exploration
+Holdout_100_Unseen,BM25,3,0.142,0.6817,0.7,0.5935,0.6254,9.0,18.32,P50 CI95: +/-2.134ms
+Holdout_100_Unseen,Dense,3,0.142,0.6753,0.7,0.5404,0.5858,7.02,8.95,P50 CI95: +/-0.7074ms
+Holdout_100_Unseen,"Hybrid_RRF_Baseline (k=60, pool=50)",3,0.158,0.7387,0.76,0.6063,0.6389,15.94,27.48,P50 CI95: +/-5.3313ms
+Holdout_100_Unseen,"Hybrid_RRF_Optimized_Combined (k=20, pool=20)",3,0.154,0.7187,0.74,0.6055,0.638,17.74,30.69,P50 CI95: +/-0.9918ms
+Holdout_100_Unseen,Hybrid_CrossEncoder_Baseline (pool=20),3,0.148,0.692,0.72,0.5925,0.6295,1135.72,1590.58,P50 CI95: +/-115.4431ms
+Holdout_100_Unseen,Hybrid_CrossEncoder_Optimized (pool=10),3,0.154,0.722,0.75,0.6144,0.6527,664.11,859.89,P50 CI95: +/-24.9618ms
