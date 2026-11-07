@@ -349,9 +349,14 @@ def smoke(client: Any, collection: str) -> None:
 
 def main() -> None:
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("command", choices=("migrate", "audit", "smoke"))
+    parser.add_argument("command", choices=("migrate", "audit", "smoke", "activate"))
     parser.add_argument("--batch-size", type=int, default=64)
     parser.add_argument("--collection")
+    parser.add_argument(
+        "--activate",
+        action="store_true",
+        help="Explicitly switch the production alias to the migrated collection after audit and smoke tests pass.",
+    )
     args = parser.parse_args()
     if args.batch_size < 1 or args.batch_size > 512:
         raise SystemExit("--batch-size must be between 1 and 512")
@@ -376,6 +381,21 @@ def main() -> None:
                 args.batch_size,
             )
             audit(client, collection, manifest)
+            smoke(client, collection)
+            if args.activate:
+                _activate_alias(client, collection)
+            else:
+                print(
+                    f"Collection '{collection}' migrated and verified. "
+                    "Production alias NOT switched (safety protection). "
+                    f"To activate, run: python scripts/migrate_qdrant.py activate --collection {collection}"
+                )
+        elif args.command == "activate":
+            if not collection:
+                raise SystemExit(
+                    "The 'activate' command requires an explicit --collection argument"
+                )
+            audit(client, collection)
             smoke(client, collection)
             _activate_alias(client, collection)
         elif args.command == "audit":

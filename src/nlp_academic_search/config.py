@@ -129,7 +129,10 @@ class Settings(BaseSettings):
     cors_origins: str = "http://localhost:8501,http://127.0.0.1:8501"
     api_request_timeout_seconds: float = Field(default=60.0, gt=0, le=600)
     api_concurrency_limit: int = Field(default=4, ge=1, le=128)
-    rag_min_relevance_score: float = Field(default=0.2, ge=-1, le=1)
+    rag_min_relevance_score: float = Field(default=0.35, ge=-1, le=1)
+    rag_min_bm25_score: float = Field(default=5.0, ge=0)
+    rag_min_rrf_score: float = Field(default=0.334, ge=0)
+    reranker_min_score: float = Field(default=0.0)
     rag_max_context_chars: int = Field(default=24000, ge=1000, le=200000)
     rag_enabled: bool = True
     qdrant_url: str | None = None

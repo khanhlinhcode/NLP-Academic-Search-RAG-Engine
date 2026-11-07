@@ -83,6 +83,122 @@ class QdrantCloudRetrievalProvider:
             )
         return models.Filter(must=must)
 
+    def _query_hybrid(
+        self, query: str, top_k: int, filters: SearchFilters | None
+    ) -> list[SearchResult]:
+        models = self._models()
+        query_filter = self._paper_filter(filters)
+        pool = max(top_k, self.candidate_pool)
+
+        dense_request = models.QueryRequest(
+            query=models.Document(text=query, model=self.dense_model),
+            using="dense",
+            filter=query_filter,
+            limit=pool,
+            with_payload=True,
+        )
+        sparse_request = models.QueryRequest(
+            query=models.Document(text=query, model=self.sparse_model),
+            using="sparse",
+            filter=query_filter,
+            limit=pool,
+            with_payload=True,
+        )
+
+        batch_fn: Any = getattr(self.client, "query_batch_points", None)
+        if callable(batch_fn):
+            responses: Any = batch_fn(
+                collection_name=self.collection_name,
+                requests=[dense_request, sparse_request],
+            )
+            dense_points = list(getattr(responses[0], "points", responses[0]))
+            sparse_points = list(getattr(responses[1], "points", responses[1]))
+        else:
+            dense_resp = self.client.query_points(
+                collection_name=self.collection_name,
+                query=models.Document(text=query, model=self.dense_model),
+                using="dense",
+                query_filter=query_filter,
+                limit=pool,
+                with_payload=True,
+            )
+            sparse_resp = self.client.query_points(
+                collection_name=self.collection_name,
+                query=models.Document(text=query, model=self.sparse_model),
+                using="sparse",
+                query_filter=query_filter,
+                limit=pool,
+                with_payload=True,
+            )
+            dense_points = list(getattr(dense_resp, "points", dense_resp))
+            sparse_points = list(getattr(sparse_resp, "points", sparse_resp))
+
+        # Calculate exact RRF with k=2 and 0-based rank matching Qdrant Rust implementation:
+        # 1.0 / (k + rank) where rank = 0, 1, 2, ...
+        rrf_k = 2.0
+        candidates: dict[str, dict[str, Any]] = {}
+
+        for rank, pt in enumerate(dense_points):
+            payload = dict(getattr(pt, "payload", None) or {})
+            paper = self._paper_from_payload(payload)
+            score = float(getattr(pt, "score", 0.0) or 0.0)
+            pid = paper.id
+            if pid not in candidates:
+                candidates[pid] = {
+                    "paper": paper,
+                    "semantic_score": score,
+                    "bm25_score": None,
+                    "rrf_score": 1.0 / (rrf_k + rank),
+                }
+            else:
+                candidates[pid]["semantic_score"] = score
+                candidates[pid]["rrf_score"] += 1.0 / (rrf_k + rank)
+
+        for rank, pt in enumerate(sparse_points):
+            payload = dict(getattr(pt, "payload", None) or {})
+            paper = self._paper_from_payload(payload)
+            score = float(getattr(pt, "score", 0.0) or 0.0)
+            pid = paper.id
+            if pid not in candidates:
+                candidates[pid] = {
+                    "paper": paper,
+                    "semantic_score": None,
+                    "bm25_score": score,
+                    "rrf_score": 1.0 / (rrf_k + rank),
+                }
+            else:
+                candidates[pid]["bm25_score"] = score
+                candidates[pid]["rrf_score"] += 1.0 / (rrf_k + rank)
+
+        # Deterministic ranking and tie-breaking policy:
+        # 1. rrf_score: real unrounded float descending (-rrf)
+        # 2. semantic_score: real score descending, distinguishing 0.0 from None (None is -inf)
+        # 3. bm25_score: real score descending, distinguishing 0.0 from None (None is -inf)
+        # 4. paper.id: canonical alphabetical order ascending
+        sorted_candidates = sorted(
+            candidates.values(),
+            key=lambda item: (
+                -float(item["rrf_score"]),
+                -(
+                    float(item["semantic_score"])
+                    if item["semantic_score"] is not None
+                    else -float("inf")
+                ),
+                -(float(item["bm25_score"]) if item["bm25_score"] is not None else -float("inf")),
+                str(item["paper"].id),
+            ),
+        )[:top_k]
+
+        return [
+            SearchResult(
+                paper=item["paper"],
+                semantic_score=item["semantic_score"],
+                bm25_score=item["bm25_score"],
+                rrf_score=float(item["rrf_score"]),
+            )
+            for item in sorted_candidates
+        ]
+
     def _query_points(
         self, query: str, method: str, top_k: int, filters: SearchFilters | None
     ) -> list[Any]:
@@ -186,9 +302,11 @@ class QdrantCloudRetrievalProvider:
         if method == "hybrid" and fusion != FusionMethod.RRF:
             raise RetrievalUnavailableError("Qdrant cloud profile supports RRF fusion only")
         try:
+            if method == "hybrid":
+                results = self._query_hybrid(query, top_k, filters)
+                return RetrievalBatch(results, fusion.value)
             points = self._query_points(query, method, top_k, filters)
-            mode = fusion.value if method == "hybrid" else method
-            return RetrievalBatch(self._results(points, method), mode)
+            return RetrievalBatch(self._results(points, method), method)
         except Exception as exc:
             if method == "hybrid" and self.allow_degraded:
                 try:

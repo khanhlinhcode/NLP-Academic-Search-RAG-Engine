@@ -565,6 +565,45 @@ def test_readiness_reports_required_verifier_unavailable(services, monkeypatch):
     assert payload["verification_required"] is True
 
 
+def test_ask_out_of_domain_refuses_without_calling_generator(services, monkeypatch):
+    from nlp_academic_search.search.models import SearchResult
+
+    generator_called = False
+
+    class SpyGenerator:
+        model_name = "spy-generator"
+
+        def generate(self, *_args, **_kwargs):
+            nonlocal generator_called
+            generator_called = True
+            return "This should never be generated."
+
+    services.rag_generator = SpyGenerator()  # type: ignore[assignment]
+    monkeypatch.setattr(services, "ollama_available", lambda: True)
+
+    # Return OOD candidate with low semantic similarity and single-modality RRF under Qdrant k=2 (1/(2+0) = 0.50)
+    ood_result = SearchResult(
+        paper=services.papers[0],
+        bm25_score=None,
+        semantic_score=0.08,
+        rrf_score=0.50,
+    )
+    monkeypatch.setattr(services, "retrieve_for_rag", lambda *_: ([ood_result], [], "rrf"))
+
+    with TestClient(create_app(services)) as client:
+        response = client.post(
+            "/api/v1/ask",
+            json={"question": "What is retrieval-augmented generation?", "top_k": 1},
+        )
+
+    assert response.status_code == 200
+    payload = response.json()
+    assert payload["metadata"]["answer_status"] == "refused_insufficient_context"
+    assert "Not enough evidence in the retrieved sources" in payload["answer"]
+    assert payload["sources"] == []
+    assert not generator_called
+
+
 def test_bearer_auth_protects_api_but_not_liveness(services, monkeypatch):
     monkeypatch.setattr(settings, "backend_api_token", "backend-secret")
     monkeypatch.setattr(services, "ollama_available", lambda: True)

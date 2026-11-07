@@ -58,10 +58,24 @@ class FakeQdrantClient:
 
     def query_points(self, **kwargs):
         self.calls.append(kwargs)
+        if not self.responses:
+            return SimpleNamespace(points=[])
         response = self.responses.pop(0)
         if isinstance(response, Exception):
             raise response
         return response
+
+    def query_batch_points(self, **kwargs):
+        self.calls.append(kwargs)
+        if not self.responses:
+            return [SimpleNamespace(points=[]), SimpleNamespace(points=[])]
+        if isinstance(self.responses[0], BaseException):
+            exc = self.responses.pop(0)
+            if isinstance(exc, BaseException):
+                raise exc
+        dense_resp = self.responses.pop(0)
+        sparse_resp = self.responses.pop(0) if self.responses else SimpleNamespace(points=[])
+        return [dense_resp, sparse_resp]
 
     def get_collection(self, _name):
         return SimpleNamespace(status="green")
@@ -119,6 +133,255 @@ def test_qdrant_hybrid_can_report_explicit_bm25_degradation():
     assert batch.retrieval_mode == "bm25_degraded"
     assert batch.results[0].bm25_score == 2.1
     assert "BM25-only" in batch.warnings[0]
+
+
+def test_qdrant_hybrid_batch_populates_per_channel_scores():
+    client = FakeQdrantClient(
+        [
+            SimpleNamespace(points=[point(0.72)]),
+            SimpleNamespace(points=[point(8.5)]),
+        ]
+    )
+    provider = QdrantCloudRetrievalProvider(qdrant_config(), client=client)
+
+    batch = provider.search("attention mechanisms", "hybrid", 3)
+
+    assert batch.retrieval_mode == "rrf"
+    assert len(batch.results) == 1
+    result = batch.results[0]
+    assert result.paper.id == "arxiv:1706.03762"
+    assert result.semantic_score == 0.72
+    assert result.bm25_score == 8.5
+    # Rank 0 in both dense and sparse: 1/(2+0) + 1/(2+0) = 0.5 + 0.5 = 1.00
+    assert result.rrf_score == 1.00
+
+
+def test_qdrant_real_local_engine_batch_query_parity():
+    """Verify Qdrant batch querying and RRF parity directly against real local Qdrant Rust engine."""
+    from qdrant_client import QdrantClient, models
+
+    client = QdrantClient(":memory:")
+    client.create_collection(
+        "papers-current",
+        vectors_config={"dense": models.VectorParams(size=4, distance=models.Distance.COSINE)},
+        sparse_vectors_config={"sparse": models.SparseVectorParams()},
+    )
+    client.upsert(
+        "papers-current",
+        points=[
+            models.PointStruct(
+                id=1,
+                vector={
+                    "dense": [1.0, 0.0, 0.0, 0.0],
+                    "sparse": models.SparseVector(indices=[1], values=[10.0]),
+                },
+                payload={
+                    "record_type": "paper",
+                    "paper_id": "arxiv:1706.03762",
+                    "title": "Attention Is All You Need",
+                    "abstract": "The Transformer uses attention mechanisms.",
+                    "authors": ["Ashish Vaswani"],
+                    "categories": ["cs.CL"],
+                    "year": 2017,
+                    "published_at": "2017-06-12T00:00:00Z",
+                    "source": "arxiv",
+                },
+            ),
+            models.PointStruct(
+                id=2,
+                vector={
+                    "dense": [0.0, 1.0, 0.0, 0.0],
+                    "sparse": models.SparseVector(indices=[2], values=[5.0]),
+                },
+                payload={
+                    "record_type": "paper",
+                    "paper_id": "arxiv:1810.04805",
+                    "title": "BERT",
+                    "abstract": "Deep Bidirectional Transformers.",
+                    "authors": ["Jacob Devlin"],
+                    "categories": ["cs.CL"],
+                    "year": 2018,
+                    "published_at": "2018-10-11T00:00:00Z",
+                    "source": "arxiv",
+                },
+            ),
+        ],
+    )
+
+    # 1. Run actual server-side FusionQuery RRF
+    fusion_resp = client.query_points(
+        collection_name="papers-current",
+        prefetch=[
+            models.Prefetch(query=[1.0, 0.0, 0.0, 0.0], using="dense", limit=10),
+            models.Prefetch(
+                query=models.SparseVector(indices=[1], values=[1.0]), using="sparse", limit=10
+            ),
+        ],
+        query=models.FusionQuery(fusion=models.Fusion.RRF),
+        limit=2,
+    )
+    server_points = fusion_resp.points
+
+    # 2. Run actual batch query on local engine
+    batch_resp = client.query_batch_points(
+        collection_name="papers-current",
+        requests=[
+            models.QueryRequest(
+                query=[1.0, 0.0, 0.0, 0.0], using="dense", limit=10, with_payload=True
+            ),
+            models.QueryRequest(
+                query=models.SparseVector(indices=[1], values=[1.0]),
+                using="sparse",
+                limit=10,
+                with_payload=True,
+            ),
+        ],
+    )
+    dense_pts = batch_resp[0].points
+    sparse_pts = batch_resp[1].points
+
+    # Compute manual RRF with k=2 and 0-based rank
+    rrf_k = 2.0
+    scores = {}
+    for r, p in enumerate(dense_pts):
+        scores[p.id] = scores.get(p.id, 0.0) + 1.0 / (rrf_k + r)
+    for r, p in enumerate(sparse_pts):
+        scores[p.id] = scores.get(p.id, 0.0) + 1.0 / (rrf_k + r)
+
+    manual_sorted = sorted(scores.items(), key=lambda x: x[1], reverse=True)
+
+    # Assert exact parity between server-side RRF and batched calculation
+    assert len(server_points) == len(manual_sorted) == 2
+    for s_pt, (m_id, m_score) in zip(server_points, manual_sorted, strict=True):
+        assert s_pt.id == m_id
+        assert abs(s_pt.score - m_score) < 1e-5
+
+
+def make_custom_point(paper_id: str, score: float) -> SimpleNamespace:
+    return SimpleNamespace(
+        score=score,
+        payload={
+            "record_type": "paper",
+            "paper_id": paper_id,
+            "title": f"Title for {paper_id}",
+            "abstract": f"Abstract for {paper_id}",
+            "authors": ["Author"],
+            "categories": ["cs.CL"],
+            "year": 2020,
+            "published_at": "2020-01-01T00:00:00Z",
+            "source": "arxiv",
+        },
+    )
+
+
+def test_qdrant_tie_breaking_dense_zero_strictly_precedes_none():
+    """Verify that when RRF scores tie, measured dense score 0.0 strictly precedes missing score None."""
+
+    class Client:
+        def query_batch_points(self, **_):
+            return [
+                SimpleNamespace(
+                    points=[make_custom_point("dummy", 0.9), make_custom_point("p_zero", 0.0)]
+                ),
+                SimpleNamespace(
+                    points=[make_custom_point("dummy2", 10.0), make_custom_point("p_none", 5.0)]
+                ),
+            ]
+
+    provider = QdrantCloudRetrievalProvider(qdrant_config(), client=Client())
+    batch = provider.search("test", "hybrid", 4)
+    res = {r.paper.id: r for r in batch.results}
+    assert res["p_zero"].semantic_score == 0.0
+    assert res["p_none"].semantic_score is None
+
+    order = [r.paper.id for r in batch.results]
+    assert order.index("p_zero") < order.index("p_none")
+
+
+def test_qdrant_tie_breaking_sparse_zero_handled_and_ordered():
+    """Verify that when RRF and dense scores tie, higher BM25 score precedes 0.0, which is preserved."""
+
+    class Client:
+        def query_batch_points(self, **_):
+            return [
+                SimpleNamespace(
+                    points=[make_custom_point("doc_1", 0.5), make_custom_point("doc_2", 0.5)]
+                ),
+                SimpleNamespace(
+                    points=[make_custom_point("doc_2", 10.0), make_custom_point("doc_1", 0.0)]
+                ),
+            ]
+
+    provider = QdrantCloudRetrievalProvider(qdrant_config(), client=Client())
+    batch = provider.search("test", "hybrid", 2)
+    order = [r.paper.id for r in batch.results]
+    assert order == ["doc_2", "doc_1"]
+    assert batch.results[1].bm25_score == 0.0
+
+
+def test_qdrant_missing_scores_preserved_as_none():
+    """Verify that missing modality scores remain strictly None without artificial defaults."""
+
+    class Client:
+        def query_batch_points(self, **_):
+            return [
+                SimpleNamespace(points=[make_custom_point("dense_only", 0.8)]),
+                SimpleNamespace(points=[make_custom_point("sparse_only", 12.0)]),
+            ]
+
+    provider = QdrantCloudRetrievalProvider(qdrant_config(), client=Client())
+    batch = provider.search("test", "hybrid", 2)
+    res = {r.paper.id: r for r in batch.results}
+    assert res["dense_only"].bm25_score is None
+    assert res["sparse_only"].semantic_score is None
+
+
+def test_qdrant_unrounded_rrf_preserves_sub_micro_differences():
+    """Verify that real unrounded RRF scores sort strictly without 6-decimal truncation collision."""
+
+    # Difference: 1/(2+198) + 1/(2+200) vs 2/(2+199) is ~0.000000246 (< 1e-6)
+    class Client:
+        def query_batch_points(self, **_):
+            dense = [make_custom_point(f"d_{i}", 0.5) for i in range(198)] + [
+                make_custom_point("cand_A", 0.1),
+                make_custom_point("cand_B", 0.9),
+            ]
+            sparse = [make_custom_point(f"s_{i}", 5.0) for i in range(199)] + [
+                make_custom_point("cand_B", 5.0),
+                make_custom_point("cand_A", 5.0),
+            ]
+            return [SimpleNamespace(points=dense), SimpleNamespace(points=sparse)]
+
+    provider = QdrantCloudRetrievalProvider(qdrant_config(), client=Client(), candidate_pool=250)
+    batch = provider.search("test", "hybrid", 250)
+    order = [r.paper.id for r in batch.results]
+    assert order.index("cand_A") < order.index("cand_B")
+
+
+def test_qdrant_truly_equal_rrf_breaks_tie_alphabetically_by_paper_id():
+    """Verify that truly equal RRF and channel scores break ties alphabetically by paper.id."""
+
+    class Client:
+        def query_batch_points(self, **_):
+            return [
+                SimpleNamespace(
+                    points=[
+                        make_custom_point("arxiv:2005.11401", 0.6),
+                        make_custom_point("arxiv:1706.03762", 0.6),
+                    ]
+                ),
+                SimpleNamespace(
+                    points=[
+                        make_custom_point("arxiv:1706.03762", 8.0),
+                        make_custom_point("arxiv:2005.11401", 8.0),
+                    ]
+                ),
+            ]
+
+    provider = QdrantCloudRetrievalProvider(qdrant_config(), client=Client())
+    batch = provider.search("test", "hybrid", 2)
+    order = [r.paper.id for r in batch.results]
+    assert order == ["arxiv:1706.03762", "arxiv:2005.11401"]
 
 
 def test_qdrant_status_validates_manifest():

@@ -45,6 +45,7 @@ from nlp_academic_search.rag.prompt_builder import (
     build_source_list,
 )
 from nlp_academic_search.rag.verification import SemanticValidation
+from nlp_academic_search.search.models import SearchResult
 
 router = APIRouter(prefix="/ask", tags=["RAG"])
 logger = logging.getLogger("academic_search.rag")
@@ -519,6 +520,44 @@ async def _validate_and_repair_async(
     )
 
 
+def is_relevant_evidence(result: SearchResult) -> bool:
+    """Assess whether a search candidate meets calibrated relevance thresholds for RAG evidence.
+
+    Factual relevance requires calibrated similarity signals:
+    - Reranker: reranker_score >= reranker_min_score (default 0.0)
+    - Semantic similarity: semantic_score >= rag_min_relevance_score (default 0.35)
+    - Lexical-semantic concordance: semantic_score >= 0.25 AND bm25_score >= rag_min_bm25_score (default 5.0)
+    - Discordance rejection: if semantic_score < 0.25, candidate is rejected even with high BM25 or high RRF.
+    - Pure BM25 (e.g. degraded mode without dense): bm25_score >= rag_min_bm25_score when rrf_score is None.
+    - Single-modality BM25 in hybrid or RRF-only: FAIL-CLOSED (returns False).
+      RRF is strictly a ranking score (k=2, 0-based rank: top-1 is 0.50) and cannot certify evidence relevance.
+    """
+    if result.reranker_score is not None:
+        return result.reranker_score >= settings.reranker_min_score
+
+    has_semantic = result.semantic_score is not None
+    has_bm25 = result.bm25_score is not None
+
+    if has_semantic and has_bm25:
+        semantic = float(result.semantic_score)  # type: ignore[arg-type]
+        bm25 = float(result.bm25_score)  # type: ignore[arg-type]
+        if semantic < 0.25:
+            # Keyword overlap on unrelated topic; cannot ground factual claims
+            return False
+        if semantic >= settings.rag_min_relevance_score:
+            return True
+        return bm25 >= settings.rag_min_bm25_score
+
+    if has_semantic:
+        return float(result.semantic_score) >= settings.rag_min_relevance_score  # type: ignore[arg-type]
+
+    if has_bm25 and result.rrf_score is None:
+        return float(result.bm25_score) >= settings.rag_min_bm25_score  # type: ignore[arg-type]
+
+    # Hybrid single-modality BM25 noise, RRF-only, or unscored: fail-closed
+    return False
+
+
 def _prepare(
     request: AskRequest, services: ServiceContainer
 ) -> tuple[PromptPackage, list[SourceReference], list[str], str, float]:
@@ -526,13 +565,7 @@ def _prepare(
     results, warnings, retrieval_method = services.retrieve_for_rag(
         request.question, request.top_k, request.use_reranker
     )
-    thresholded = [
-        result
-        for result in results
-        if (result.bm25_score or 0) > 0
-        or (result.semantic_score or -1) >= settings.rag_min_relevance_score
-        or (result.rrf_score or 0) > 0
-    ]
+    thresholded = [result for result in results if is_relevant_evidence(result)]
     papers = [result.paper for result in thresholded]
     retrieval_ms = (time.perf_counter() - started) * 1000
     package = build_rag_messages(request.question, papers)
