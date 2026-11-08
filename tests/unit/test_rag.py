@@ -978,3 +978,111 @@ def test_blocker3_case_8_sse_streaming_refusal_and_metadata(services, monkeypatc
     events = [line for line in response.text.split("\n\n") if line.strip()]
     assert any("refused_insufficient_context" in e for e in events)
     assert any("Not enough evidence in the retrieved sources." in e for e in events)
+
+
+def test_wordnet_semantic_verification_grounded_vs_unsupported():
+    """Verify deterministic semantic verification behavior on actual WordNet cmp-lg/9808002 paper."""
+    from nlp_academic_search.data.loader import Paper
+    from nlp_academic_search.rag.citations import validate_citations
+    from nlp_academic_search.rag.verification import (
+        ClaimAssessment,
+        EvidenceSpan,
+        validate_semantic_assessment,
+    )
+
+    paper = Paper(
+        id="arxiv:cmp-lg/9808002",
+        arxiv_id="cmp-lg/9808002",
+        title="Indexing with WordNet synsets can improve Text Retrieval",
+        abstract=(
+            "The classical, vector space model for text retrieval is shown to give better results "
+            "(up to 29% better in our experiments) if WordNet synsets are chosen as the indexing "
+            "space, instead of word forms. This result is obtained for a manually disambiguated "
+            "test collection (of queries and documents) derived from the Semcor semantic "
+            "concordance. The sensitivity of retrieval performance to (automatic) disambiguation "
+            "errors when indexing documents is also measured. Finally, it is observed that if "
+            "queries are not disambiguated, indexing by synsets performs (at best) only as good as "
+            "standard word indexing."
+        ),
+        authors=["Julio Gonzalo", "Felisa Verdejo", "Irina Chugur", "Juan M. Cigarran"],
+        categories=["cs.CL", "cmp-lg"],
+        source="arxiv",
+    )
+
+    # 1. Fully grounded answer with exact quote spans
+    s1 = "Choosing WordNet synsets as indexing space instead of word forms yields up to 29% better results in vector space retrieval [1]."
+    s2 = "However, indexing by synsets performs at best only as good as standard word indexing when queries are not disambiguated [1]."
+    grounded_answer = f"{s1} {s2}"
+
+    assert validate_citations(grounded_answer, 1).valid is True
+
+    valid_assessments = [
+        ClaimAssessment(
+            claim_text=s1,
+            factual=True,
+            cited_indices=[1],
+            verdict="supported",
+            evidence=[
+                EvidenceSpan(
+                    source_index=0,
+                    quote="vector space model for text retrieval is shown to give better results (up to 29% better in our experiments) if WordNet synsets are chosen as the indexing space, instead of word forms",
+                )
+            ],
+            explanation="Exact match in abstract.",
+        ),
+        ClaimAssessment(
+            claim_text=s2,
+            factual=True,
+            cited_indices=[1],
+            verdict="supported",
+            evidence=[
+                EvidenceSpan(
+                    source_index=0,
+                    quote="if queries are not disambiguated, indexing by synsets performs (at best) only as good as standard word indexing",
+                )
+            ],
+            explanation="Exact match in abstract.",
+        ),
+    ]
+
+    val = validate_semantic_assessment(
+        grounded_answer,
+        [paper],
+        valid_assessments,
+        provider="groq",
+        model="openai/gpt-oss-20b",
+        independent=False,
+    )
+    assert val.valid is True
+    assert val.supported_claim_count == 2
+    assert val.unsupported_claim_count == 0
+    assert val.invalid_evidence_spans == []
+
+    # 2. Unsupported claim (using background knowledge not in abstract)
+    unsupported_claim = "WordNet synsets improve text retrieval by expanding synonyms and resolving lexical polysemy [1]."
+    bad_answer = f"{unsupported_claim} {s1}"
+
+    unsupported_assessments = [
+        ClaimAssessment(
+            claim_text=unsupported_claim,
+            factual=True,
+            cited_indices=[1],
+            verdict="unsupported",
+            evidence=[],
+            explanation="The abstract does not claim synsets expand synonyms or resolve polysemy.",
+        ),
+        valid_assessments[0],
+    ]
+
+    val_bad = validate_semantic_assessment(
+        bad_answer,
+        [paper],
+        unsupported_assessments,
+        provider="groq",
+        model="openai/gpt-oss-20b",
+        independent=False,
+    )
+    assert val_bad.valid is False
+    assert val_bad.supported_claim_count == 1
+    assert val_bad.unsupported_claim_count == 1
+    assert "One or more factual claims were not semantically supported" in val_bad.warnings[0]

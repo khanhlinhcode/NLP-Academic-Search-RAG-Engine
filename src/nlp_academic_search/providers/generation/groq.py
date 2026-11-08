@@ -72,25 +72,68 @@ class GroqGenerationProvider:
         except ValueError:
             return None
 
-    def _map_http_error(self, exc: Exception) -> RAGGenerationError:
+    @staticmethod
+    def _request_id(response: httpx.Response | None) -> str | None:
+        if response is None:
+            return None
+        return response.headers.get("x-request-id") or response.headers.get("x-groq-request-id")
+
+    def _map_http_error(
+        self,
+        exc: Exception,
+        *,
+        tokens_emitted: bool = False,
+    ) -> RAGGenerationError:
         if isinstance(exc, httpx.TimeoutException):
-            return GenerationTimeoutError("Generation provider timed out")
+            return GenerationTimeoutError(
+                "Generation provider timed out",
+                tokens_emitted=tokens_emitted,
+            )
         if isinstance(exc, httpx.ConnectError):
-            return ModelUnavailableError("Generation provider is unavailable")
+            return ModelUnavailableError(
+                "Generation provider is unavailable",
+                tokens_emitted=tokens_emitted,
+            )
         if isinstance(exc, httpx.HTTPStatusError):
             status = exc.response.status_code
+            request_id = self._request_id(exc.response)
+            retry_after = self._retry_after(exc.response)
             if status == 429:
                 return GenerationRateLimitedError(
                     "Generation provider rate limit exceeded",
-                    retry_after=self._retry_after(exc.response),
+                    retry_after=retry_after,
+                    provider_http_status=status,
+                    provider_request_id=request_id,
+                    tokens_emitted=tokens_emitted,
                 )
             if status in {401, 403}:
-                return ModelUnavailableError("Generation provider authentication failed")
+                return ModelUnavailableError(
+                    "Generation provider authentication failed",
+                    provider_http_status=status,
+                    provider_request_id=request_id,
+                    tokens_emitted=tokens_emitted,
+                )
             if status in {404, 502, 503, 504}:
-                return ModelUnavailableError("Generation provider or model is unavailable")
-        return RAGGenerationError("Generation provider request failed")
+                return ModelUnavailableError(
+                    "Generation provider or model is unavailable",
+                    provider_http_status=status,
+                    provider_request_id=request_id,
+                    tokens_emitted=tokens_emitted,
+                )
+            return RAGGenerationError(
+                f"Generation provider request failed with status {status}",
+                provider_http_status=status,
+                provider_request_id=request_id,
+                retry_after=retry_after,
+                tokens_emitted=tokens_emitted,
+            )
+        return RAGGenerationError(
+            "Generation provider request failed",
+            tokens_emitted=tokens_emitted,
+        )
 
     def generate(self, messages: list[dict[str, str]], temperature: float = 0.2) -> str:
+        response: httpx.Response | None = None
         try:
             response = self._client.post(
                 "/chat/completions",
@@ -99,15 +142,44 @@ class GroqGenerationProvider:
             )
             response.raise_for_status()
             payload = response.json()
-            answer = payload["choices"][0]["message"]["content"].strip()
+            choices = payload.get("choices") or []
+            if not choices:
+                raise GenerationInvalidResponseError(
+                    "Generation provider returned empty choices",
+                    provider_http_status=response.status_code,
+                    provider_request_id=self._request_id(response),
+                    output_token_usage=payload.get("usage"),
+                )
+            choice = choices[0]
+            finish_reason = choice.get("finish_reason")
+            usage = payload.get("usage")
+            message = choice.get("message") or {}
+            content = message.get("content") or ""
+            answer = content.strip()
+            if finish_reason == "length":
+                raise GenerationInvalidResponseError(
+                    "Generation provider truncated response (finish_reason=length)",
+                    provider_http_status=response.status_code,
+                    provider_request_id=self._request_id(response),
+                    finish_reason="length",
+                    output_token_usage=usage,
+                )
             if not answer:
-                raise GenerationInvalidResponseError("Generation provider returned an empty answer")
+                raise GenerationInvalidResponseError(
+                    "Generation provider returned an empty answer",
+                    provider_http_status=response.status_code,
+                    provider_request_id=self._request_id(response),
+                    finish_reason=finish_reason,
+                    output_token_usage=usage,
+                )
             return answer
         except RAGGenerationError:
             raise
         except (KeyError, IndexError, TypeError, json.JSONDecodeError, ValueError) as exc:
             raise GenerationInvalidResponseError(
-                "Generation provider returned an invalid response"
+                "Generation provider returned an invalid response",
+                provider_http_status=response.status_code if response is not None else None,
+                provider_request_id=self._request_id(response),
             ) from exc
         except httpx.HTTPError as exc:
             raise self._map_http_error(exc) from exc
@@ -116,8 +188,11 @@ class GroqGenerationProvider:
         self, messages: list[dict[str, str]], temperature: float = 0.2
     ) -> AsyncGenerator[str, None]:
         emitted = False
+        last_finish_reason: str | None = None
+        last_usage: dict[str, Any] | None = None
         for attempt in range(2):
             try:
+                completed_done = False
                 async with httpx.AsyncClient(
                     base_url=self.base_url,
                     headers=self._headers(self._api_key),
@@ -130,6 +205,7 @@ class GroqGenerationProvider:
                         json=self._payload(messages, temperature, stream=True),
                     ) as response:
                         response.raise_for_status()
+                        request_id = self._request_id(response)
                         async for line in response.aiter_lines():
                             if not line or line.startswith(":"):
                                 continue
@@ -137,24 +213,59 @@ class GroqGenerationProvider:
                                 continue
                             raw = line.removeprefix("data:").strip()
                             if raw == "[DONE]":
+                                completed_done = True
                                 return
                             try:
                                 chunk = json.loads(raw)
-                                token = chunk["choices"][0]["delta"].get("content") or ""
+                                if chunk.get("usage"):
+                                    last_usage = chunk["usage"]
+                                choices = chunk.get("choices") or []
+                                if not choices:
+                                    continue
+                                choice = choices[0]
+                                finish_reason = choice.get("finish_reason")
+                                if finish_reason:
+                                    last_finish_reason = finish_reason
+                                if finish_reason == "length":
+                                    raise GenerationInvalidResponseError(
+                                        "Generation provider truncated stream (finish_reason=length)",
+                                        provider_http_status=response.status_code,
+                                        provider_request_id=request_id,
+                                        finish_reason="length",
+                                        output_token_usage=last_usage,
+                                        tokens_emitted=emitted,
+                                    )
+                                delta = choice.get("delta") or {}
+                                token = delta.get("content") or ""
                             except (KeyError, IndexError, TypeError, json.JSONDecodeError) as exc:
                                 raise GenerationInvalidResponseError(
-                                    "Generation provider returned an invalid stream"
+                                    "Generation provider returned an invalid stream",
+                                    provider_http_status=response.status_code,
+                                    provider_request_id=request_id,
+                                    finish_reason=last_finish_reason,
+                                    output_token_usage=last_usage,
+                                    tokens_emitted=emitted,
                                 ) from exc
                             if token:
                                 emitted = True
                                 yield token
+
+                        if not completed_done:
+                            raise GenerationInvalidResponseError(
+                                "Generation stream closed prematurely without [DONE]",
+                                provider_http_status=response.status_code,
+                                provider_request_id=request_id,
+                                finish_reason=last_finish_reason,
+                                output_token_usage=last_usage,
+                                tokens_emitted=emitted,
+                            )
                 return
             except asyncio.CancelledError:
                 raise
             except GenerationInvalidResponseError:
                 raise
             except httpx.HTTPError as exc:
-                mapped = self._map_http_error(exc)
+                mapped = self._map_http_error(exc, tokens_emitted=emitted)
                 retryable = isinstance(exc, (httpx.ConnectError, httpx.TimeoutException)) or (
                     isinstance(exc, httpx.HTTPStatusError)
                     and exc.response.status_code in {502, 503, 504}

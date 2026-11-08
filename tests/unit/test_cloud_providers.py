@@ -455,3 +455,154 @@ def test_groq_maps_rate_limit_and_invalid_payload():
     )
     with pytest.raises(GenerationInvalidResponseError):
         GroqGenerationProvider(groq_config(), client=invalid_client).generate([])
+
+
+@pytest.mark.asyncio
+async def test_groq_streaming_empty_choices_chunk_does_not_raise():
+    def handler(_request: httpx.Request) -> httpx.Response:
+        content = (
+            'data: {"choices":[{"delta":{"content":"WordNet synsets "}}]}\n\n'
+            'data: {"choices":[],"usage":{"prompt_tokens":50,"completion_tokens":10}}\n\n'
+            'data: {"choices":[{"delta":{"content":"improve retrieval [1]."}}]}\n\n'
+            "data: [DONE]\n\n"
+        )
+        return httpx.Response(200, text=content, headers={"content-type": "text/event-stream"})
+
+    provider = GroqGenerationProvider(groq_config(), async_transport=httpx.MockTransport(handler))
+    tokens = [
+        token
+        async for token in provider.generate_stream_async([{"role": "user", "content": "Question"}])
+    ]
+    assert tokens == ["WordNet synsets ", "improve retrieval [1]."]
+
+
+def test_groq_http_error_attaches_status_and_request_id():
+    def limited(_request: httpx.Request) -> httpx.Response:
+        return httpx.Response(
+            429,
+            headers={
+                "retry-after": "3.5",
+                "x-groq-request-id": "req-groq-429",
+            },
+        )
+
+    client = httpx.Client(
+        base_url="https://api.groq.test/openai/v1", transport=httpx.MockTransport(limited)
+    )
+    with pytest.raises(GenerationRateLimitedError) as raised:
+        GroqGenerationProvider(groq_config(), client=client).generate([])
+    assert raised.value.provider_http_status == 429
+    assert raised.value.provider_request_id == "req-groq-429"
+    assert raised.value.retry_after == 3.5
+
+
+def test_groq_generate_empty_answer_raises_with_status_and_usage():
+    def empty_handler(_request: httpx.Request) -> httpx.Response:
+        return httpx.Response(
+            200,
+            headers={"x-groq-request-id": "req-empty-1"},
+            json={
+                "choices": [{"message": {"content": "   "}, "finish_reason": "length"}],
+                "usage": {"prompt_tokens": 120, "completion_tokens": 1024},
+            },
+        )
+
+    client = httpx.Client(
+        base_url="https://api.groq.test/openai/v1", transport=httpx.MockTransport(empty_handler)
+    )
+    with pytest.raises(GenerationInvalidResponseError) as raised:
+        GroqGenerationProvider(groq_config(), client=client).generate([])
+    assert raised.value.provider_http_status == 200
+    assert raised.value.provider_request_id == "req-empty-1"
+    assert raised.value.finish_reason == "length"
+    assert raised.value.output_token_usage == {"prompt_tokens": 120, "completion_tokens": 1024}
+
+
+@pytest.mark.asyncio
+async def test_groq_streaming_interruption_records_tokens_emitted():
+    def handler(_request: httpx.Request) -> httpx.Response:
+        content = (
+            'data: {"choices":[{"delta":{"content":"Partial token"}}]}\n\ndata: {invalid json\n\n'
+        )
+        return httpx.Response(
+            200,
+            text=content,
+            headers={"content-type": "text/event-stream", "x-groq-request-id": "req-stream-err"},
+        )
+
+    provider = GroqGenerationProvider(groq_config(), async_transport=httpx.MockTransport(handler))
+    generator = provider.generate_stream_async([{"role": "user", "content": "Question"}])
+    token = await anext(generator)
+    assert token == "Partial token"
+    with pytest.raises(GenerationInvalidResponseError) as raised:
+        await anext(generator)
+    assert raised.value.tokens_emitted is True
+    assert raised.value.provider_request_id == "req-stream-err"
+
+
+@pytest.mark.asyncio
+async def test_groq_streaming_missing_done_raises_invalid_stream():
+    def handler(_request: httpx.Request) -> httpx.Response:
+        content = 'data: {"choices":[{"delta":{"content":"Truncated stream"}}]}\n\n'
+        return httpx.Response(
+            200,
+            text=content,
+            headers={"content-type": "text/event-stream", "x-groq-request-id": "req-missing-done"},
+        )
+
+    provider = GroqGenerationProvider(groq_config(), async_transport=httpx.MockTransport(handler))
+    generator = provider.generate_stream_async([{"role": "user", "content": "Question"}])
+    token = await anext(generator)
+    assert token == "Truncated stream"
+    with pytest.raises(GenerationInvalidResponseError) as raised:
+        await anext(generator)
+    assert "without [DONE]" in str(raised.value)
+    assert raised.value.tokens_emitted is True
+    assert raised.value.provider_request_id == "req-missing-done"
+
+
+@pytest.mark.asyncio
+async def test_groq_streaming_finish_reason_length_raises():
+    def handler(_request: httpx.Request) -> httpx.Response:
+        content = (
+            'data: {"choices":[{"delta":{"content":"Partial start "}}]}\n\n'
+            'data: {"choices":[{"delta":{"content":""},"finish_reason":"length"}]}\n\n'
+        )
+        return httpx.Response(
+            200,
+            text=content,
+            headers={"content-type": "text/event-stream", "x-groq-request-id": "req-length-stream"},
+        )
+
+    provider = GroqGenerationProvider(groq_config(), async_transport=httpx.MockTransport(handler))
+    generator = provider.generate_stream_async([{"role": "user", "content": "Question"}])
+    token = await anext(generator)
+    assert token == "Partial start "
+    with pytest.raises(GenerationInvalidResponseError) as raised:
+        await anext(generator)
+    assert raised.value.finish_reason == "length"
+    assert raised.value.tokens_emitted is True
+    assert raised.value.provider_request_id == "req-length-stream"
+
+
+def test_groq_generate_finish_reason_length_raises():
+    def handler(_request: httpx.Request) -> httpx.Response:
+        return httpx.Response(
+            200,
+            headers={"x-groq-request-id": "req-length-gen"},
+            json={
+                "choices": [
+                    {"message": {"content": "Incomplete answer due to"}, "finish_reason": "length"}
+                ],
+                "usage": {"prompt_tokens": 80, "completion_tokens": 128},
+            },
+        )
+
+    client = httpx.Client(
+        base_url="https://api.groq.test/openai/v1", transport=httpx.MockTransport(handler)
+    )
+    with pytest.raises(GenerationInvalidResponseError) as raised:
+        GroqGenerationProvider(groq_config(), client=client).generate([])
+    assert raised.value.finish_reason == "length"
+    assert raised.value.provider_request_id == "req-length-gen"
+    assert raised.value.output_token_usage == {"prompt_tokens": 80, "completion_tokens": 128}

@@ -5,6 +5,12 @@ from fastapi.testclient import TestClient
 
 from nlp_academic_search.api.main import create_app
 from nlp_academic_search.config import settings
+from nlp_academic_search.providers.generation.base import (
+    GenerationInvalidResponseError,
+    GenerationRateLimitedError,
+    GenerationTimeoutError,
+    RAGGenerationError,
+)
 from nlp_academic_search.providers.verification.base import (
     SemanticVerificationInvalidRequest,
     SemanticVerificationTimeout,
@@ -616,3 +622,308 @@ def test_bearer_auth_protects_api_but_not_liveness(services, monkeypatch):
             headers={"Authorization": "Bearer backend-secret"},
         )
         assert authorized.status_code == 200
+
+
+class FailingRepairGenerator:
+    model_name = "failing-repair-model"
+
+    def __init__(self, failure_type: str = "rate_limit") -> None:
+        self.failure_type = failure_type
+        self.sync_calls = 0
+        self.async_calls = 0
+
+    def generate(self, messages, temperature=0.2):
+        self.sync_calls += 1
+        if self.sync_calls == 1:
+            return "WordNet synsets improve text retrieval results [1]."
+        if self.failure_type == "rate_limit":
+            raise GenerationRateLimitedError(
+                "Rate limit exceeded",
+                retry_after=2.5,
+                provider_http_status=429,
+                provider_request_id="req-groq-429",
+            )
+        if self.failure_type == "timeout":
+            raise GenerationTimeoutError("Request timed out", provider_http_status=504)
+        if self.failure_type == "empty":
+            return "   "
+        raise RAGGenerationError("Generic generation failure")
+
+    async def generate_stream_async(self, messages, temperature=0.2):
+        self.async_calls += 1
+        if self.async_calls == 1:
+            yield "WordNet synsets improve text retrieval results [1]."
+            return
+        if self.failure_type == "rate_limit":
+            raise GenerationRateLimitedError(
+                "Rate limit exceeded",
+                retry_after=2.5,
+                provider_http_status=429,
+                provider_request_id="req-groq-429",
+            )
+        if self.failure_type == "timeout":
+            raise GenerationTimeoutError("Request timed out", provider_http_status=504)
+        if self.failure_type == "empty":
+            yield "   "
+            return
+        if self.failure_type == "interrupted":
+            yield "Partial token "
+            raise GenerationInvalidResponseError(
+                "Stream interrupted prematurely",
+                tokens_emitted=True,
+                provider_request_id="req-stream-broken",
+            )
+        raise RAGGenerationError("Generic stream failure")
+
+    def is_available(self):
+        return True
+
+    def close(self):
+        return None
+
+
+def test_wordnet_short_answer_fully_evidenced(services, monkeypatch):
+    enable_semantic_verification(monkeypatch)
+    generator = CountingValidGenerator()
+    verifier = SequencedVerifier([True])
+    services.rag_generator = generator  # type: ignore[assignment]
+    services.semantic_verifier = verifier  # type: ignore[assignment]
+
+    with TestClient(create_app(services)) as client:
+        response = client.post(
+            "/api/v1/ask",
+            json={"question": "How can WordNet synsets improve text retrieval?", "top_k": 1},
+        )
+
+    assert response.status_code == 200
+    payload = response.json()
+    assert payload["metadata"]["answer_status"] == "verified"
+    assert payload["metadata"]["citation_repair_attempted"] is False
+    assert payload["metadata"]["citation_validation"]["valid"] is True
+    assert payload["metadata"]["semantic_validation"]["valid"] is True
+
+
+def test_wordnet_citation_valid_but_semantic_claim_unsupported(services, monkeypatch):
+    enable_semantic_verification(monkeypatch)
+    monkeypatch.setattr(settings, "max_rag_repair_attempts", 0)
+    generator = CountingValidGenerator()
+    verifier = SequencedVerifier([False])
+    services.rag_generator = generator  # type: ignore[assignment]
+    services.semantic_verifier = verifier  # type: ignore[assignment]
+
+    with TestClient(create_app(services)) as client:
+        response = client.post(
+            "/api/v1/ask",
+            json={"question": "How can WordNet synsets improve text retrieval?", "top_k": 1},
+        )
+
+    assert response.status_code == 200
+    payload = response.json()
+    assert payload["metadata"]["answer_status"] == "refused_unverified"
+    assert payload["metadata"]["failure_reason"] == "semantic_assessment_failed"
+    assert payload["metadata"]["citation_repair_attempted"] is False
+    assert payload["answer"] == "Not enough verified evidence in the retrieved sources."
+
+
+def test_wordnet_repair_succeeds_and_reverified(services, monkeypatch):
+    enable_semantic_verification(monkeypatch)
+    generator = SemanticRepairGenerator()
+    verifier = SequencedVerifier([False, True])
+    services.rag_generator = generator  # type: ignore[assignment]
+    services.semantic_verifier = verifier  # type: ignore[assignment]
+
+    with TestClient(create_app(services)) as client:
+        response = client.post(
+            "/api/v1/ask",
+            json={"question": "How can WordNet synsets improve text retrieval?", "top_k": 1},
+        )
+
+    assert response.status_code == 200
+    payload = response.json()
+    assert payload["metadata"]["answer_status"] == "verified"
+    assert payload["metadata"]["citation_repair_attempted"] is True
+    assert payload["metadata"]["citation_repair_succeeded"] is True
+    assert payload["metadata"]["final_answer_replaced"] is True
+    assert payload["metadata"]["failure_reason"] is None
+
+
+def test_repair_http_429_emits_structured_log_and_withholds_answer(services, monkeypatch, caplog):
+    import logging
+
+    enable_semantic_verification(monkeypatch)
+    generator = FailingRepairGenerator("rate_limit")
+    verifier = SequencedVerifier([False])
+    services.rag_generator = generator  # type: ignore[assignment]
+    services.semantic_verifier = verifier  # type: ignore[assignment]
+
+    with caplog.at_level(logging.WARNING, logger="academic_search.rag"):
+        with TestClient(create_app(services)) as client:
+            response = client.post(
+                "/api/v1/ask",
+                json={"question": "How can WordNet synsets improve text retrieval?", "top_k": 1},
+            )
+
+    assert response.status_code == 200
+    payload = response.json()
+    metadata = payload["metadata"]
+    assert metadata["answer_status"] == "refused_unverified"
+    assert metadata["failure_reason"] == "repair_provider_error"
+    assert metadata["citation_repair_attempted"] is True
+    assert metadata["citation_repair_succeeded"] is False
+    # Task 3: Repair error metadata is strictly separated from Verification error metadata
+    assert metadata["repair_error_category"] == "GenerationRateLimitedError"
+    assert metadata["repair_provider_http_status"] == 429
+    assert metadata["repair_provider_request_id"] == "req-groq-429"
+    assert metadata["verification_provider_http_status"] is None
+    assert metadata["verification_provider_request_id"] is None
+
+    # Task 4 & 14: Structured logging without secret leakage
+    assert any("rag_repair_provider_failure" in r.message for r in caplog.records)
+    log_record = next(r for r in caplog.records if "rag_repair_provider_failure" in r.message)
+    log_json = json.loads(log_record.message)
+    assert log_json["exception_class"] == "GenerationRateLimitedError"
+    assert log_json["provider_http_status"] == 429
+    assert log_json["retry_after"] == 2.5
+    assert log_json["provider_request_id"] == "req-groq-429"
+    assert log_json["repair_attempt_count"] == 1
+    assert log_json["tokens_emitted"] is False
+    assert log_json["has_partial_content"] is False
+    assert "repair_duration_ms" in log_json
+    assert "Bearer" not in log_record.message
+    assert "authorization" not in log_record.message.lower()
+
+
+def test_repair_timeout_emits_structured_log_and_withholds_answer(services, monkeypatch, caplog):
+    import logging
+
+    enable_semantic_verification(monkeypatch)
+    generator = FailingRepairGenerator("timeout")
+    verifier = SequencedVerifier([False])
+    services.rag_generator = generator  # type: ignore[assignment]
+    services.semantic_verifier = verifier  # type: ignore[assignment]
+
+    with caplog.at_level(logging.WARNING, logger="academic_search.rag"):
+        with TestClient(create_app(services)) as client:
+            response = client.post(
+                "/api/v1/ask",
+                json={"question": "How can WordNet synsets improve text retrieval?", "top_k": 1},
+            )
+
+    assert response.status_code == 200
+    payload = response.json()
+    metadata = payload["metadata"]
+    assert metadata["answer_status"] == "refused_unverified"
+    assert metadata["failure_reason"] == "repair_provider_error"
+    assert metadata["citation_repair_attempted"] is True
+    assert metadata["citation_repair_succeeded"] is False
+    assert metadata["repair_error_category"] == "GenerationTimeoutError"
+    assert metadata["repair_provider_http_status"] == 504
+    assert metadata["verification_provider_http_status"] is None
+    log_record = next(r for r in caplog.records if "rag_repair_provider_failure" in r.message)
+    log_json = json.loads(log_record.message)
+    assert log_json["exception_class"] == "GenerationTimeoutError"
+    assert log_json["provider_http_status"] == 504
+
+
+def test_repair_empty_output_emits_structured_log_and_withholds_answer(
+    services, monkeypatch, caplog
+):
+    import logging
+
+    enable_semantic_verification(monkeypatch)
+    generator = FailingRepairGenerator("empty")
+    verifier = SequencedVerifier([False])
+    services.rag_generator = generator  # type: ignore[assignment]
+    services.semantic_verifier = verifier  # type: ignore[assignment]
+
+    with caplog.at_level(logging.WARNING, logger="academic_search.rag"):
+        with TestClient(create_app(services)) as client:
+            response = client.post(
+                "/api/v1/ask",
+                json={"question": "How can WordNet synsets improve text retrieval?", "top_k": 1},
+            )
+
+    assert response.status_code == 200
+    payload = response.json()
+    metadata = payload["metadata"]
+    assert metadata["answer_status"] == "refused_unverified"
+    assert metadata["failure_reason"] == "repair_provider_error"
+    assert metadata["citation_repair_attempted"] is True
+    assert metadata["citation_repair_succeeded"] is False
+    assert metadata["repair_error_category"] == "GenerationInvalidResponseError"
+    assert metadata["verification_provider_http_status"] is None
+    log_record = next(r for r in caplog.records if "rag_repair_provider_failure" in r.message)
+    log_json = json.loads(log_record.message)
+    assert log_json["exception_class"] == "GenerationInvalidResponseError"
+    assert log_json["has_partial_content"] is False
+
+
+def test_repair_stream_interrupted_emits_structured_log_with_tokens_emitted(
+    services, monkeypatch, caplog
+):
+    import logging
+
+    enable_semantic_verification(monkeypatch)
+    generator = FailingRepairGenerator("interrupted")
+    verifier = SequencedVerifier([False])
+    services.rag_generator = generator  # type: ignore[assignment]
+    services.semantic_verifier = verifier  # type: ignore[assignment]
+
+    with caplog.at_level(logging.WARNING, logger="academic_search.rag"):
+        with TestClient(create_app(services)) as client:
+            response = client.post(
+                "/api/v1/ask/stream",
+                json={"question": "How can WordNet synsets improve text retrieval?", "top_k": 1},
+            )
+
+    assert response.status_code == 200
+    body = response.text
+    assert '"name": "answer_repair", "status": "running"' in body
+    assert '"name": "answer_repair", "status": "failed"' in body
+    assert '"citation_repair_attempted": true' in body
+    assert '"citation_repair_succeeded": false' in body
+    assert '"failure_reason": "repair_provider_error"' in body
+    log_record = next(r for r in caplog.records if "rag_repair_provider_failure" in r.message)
+    log_json = json.loads(log_record.message)
+    assert log_json["exception_class"] == "GenerationInvalidResponseError"
+    assert log_json["tokens_emitted"] is True
+    assert log_json["has_partial_content"] is True
+    # Task 1: Ensure no UnboundLocalError occurred and no partial answer leaked to user
+    done_payload = json.loads(body.split("event: done\ndata: ", 1)[1].split("\n\n", 1)[0])
+    assert done_payload["answer"] == "Not enough verified evidence in the retrieved sources."
+    assert "Partial token" not in done_payload["answer"]
+
+
+def test_repair_streaming_done_event_metadata(services, monkeypatch):
+    enable_semantic_verification(monkeypatch)
+    generator = FailingRepairGenerator("rate_limit")
+    verifier = SequencedVerifier([False])
+    services.rag_generator = generator  # type: ignore[assignment]
+    services.semantic_verifier = verifier  # type: ignore[assignment]
+
+    with TestClient(create_app(services)) as client:
+        response = client.post(
+            "/api/v1/ask/stream",
+            json={"question": "How can WordNet synsets improve text retrieval?", "top_k": 1},
+        )
+
+    assert response.status_code == 200
+    body = response.text
+    done_part = body.split("event: done\ndata: ", 1)[1].split("\n\n", 1)[0]
+    done_payload = json.loads(done_part)
+    assert done_payload["answer"] == "Not enough verified evidence in the retrieved sources."
+    meta = done_payload["metadata"]
+    assert meta["answer_status"] == "refused_unverified"
+    assert meta["failure_reason"] == "repair_provider_error"
+    assert meta["citation_repair_attempted"] is True
+    assert meta["citation_repair_succeeded"] is False
+    # Task 3: Repair vs verification separation
+    assert meta["repair_error_category"] == "GenerationRateLimitedError"
+    assert meta["repair_provider_http_status"] == 429
+    assert meta["repair_provider_request_id"] == "req-groq-429"
+    assert meta["verification_provider_http_status"] is None
+    assert meta["verification_provider_request_id"] is None
+    assert meta["initial_citation_validation"]["valid"] is True
+    assert meta["initial_semantic_validation"]["valid"] is False
+    assert "latencies" in meta
+    assert meta["latencies"]["verification_ms"] >= 0

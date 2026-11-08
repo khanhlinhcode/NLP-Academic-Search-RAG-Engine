@@ -103,6 +103,10 @@ class AnswerMetadata(BaseModel):
     failure_reason: str | None = None
     verification_provider_http_status: int | None = None
     verification_provider_request_id: str | None = None
+    repair_error_category: str | None = None
+    repair_provider_http_status: int | None = None
+    repair_provider_request_id: str | None = None
+    repair_finish_reason: str | None = None
 
 
 class AskResponse(BaseModel):

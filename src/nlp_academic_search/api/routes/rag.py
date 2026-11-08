@@ -89,6 +89,10 @@ class CitationOutcome:
     verification_provider_http_status: int | None = None
     verification_provider_request_id: str | None = None
     warning: str | None = None
+    repair_error_category: str | None = None
+    repair_provider_http_status: int | None = None
+    repair_provider_request_id: str | None = None
+    repair_finish_reason: str | None = None
 
 
 def _sse_event(event: str, payload: dict[str, object]) -> str:
@@ -118,6 +122,10 @@ def _log_outcome(request: Request, outcome: CitationOutcome, source_count: int) 
                 "provider_http_status": outcome.verification_provider_http_status,
                 "provider_error_category": outcome.failure_reason,
                 "provider_request_id": outcome.verification_provider_request_id,
+                "repair_error_category": outcome.repair_error_category,
+                "repair_provider_http_status": outcome.repair_provider_http_status,
+                "repair_provider_request_id": outcome.repair_provider_request_id,
+                "repair_finish_reason": outcome.repair_finish_reason,
             }
         )
     )
@@ -195,6 +203,9 @@ def _verification_warning(status: AnswerStatus, reason: str | None) -> str | Non
         "semantic_assessment_failed": (
             "Answer withheld because one or more claims lacked verified evidence."
         ),
+        "repair_provider_error": (
+            "Answer withheld because the generation provider could not complete answer repair."
+        ),
     }
     if reason is not None and reason in messages:
         return messages[reason]
@@ -237,6 +248,10 @@ def _outcome(
     repair_attempted: bool,
     repair_succeeded: bool | None,
     failure_reason: str | None = None,
+    repair_error_category: str | None = None,
+    repair_provider_http_status: int | None = None,
+    repair_provider_request_id: str | None = None,
+    repair_finish_reason: str | None = None,
 ) -> CitationOutcome:
     semantic_attempted = initial_semantic.attempted or final_semantic.attempted
     provider_error = final_semantic if final_semantic.error_category else initial_semantic
@@ -269,6 +284,10 @@ def _outcome(
         verification_provider_http_status=provider_error.provider_http_status,
         verification_provider_request_id=provider_error.provider_request_id,
         warning=_verification_warning(status, failure_reason),
+        repair_error_category=repair_error_category,
+        repair_provider_http_status=repair_provider_http_status,
+        repair_provider_request_id=repair_provider_request_id,
+        repair_finish_reason=repair_finish_reason,
     )
 
 
@@ -281,6 +300,10 @@ def _refused_outcome(
     final_semantic: SemanticCheck,
     repair_attempted: bool,
     reason: str,
+    repair_error_category: str | None = None,
+    repair_provider_http_status: int | None = None,
+    repair_provider_request_id: str | None = None,
+    repair_finish_reason: str | None = None,
 ) -> CitationOutcome:
     return _outcome(
         draft=draft,
@@ -293,6 +316,10 @@ def _refused_outcome(
         repair_attempted=repair_attempted,
         repair_succeeded=False if repair_attempted else None,
         failure_reason=reason,
+        repair_error_category=repair_error_category,
+        repair_provider_http_status=repair_provider_http_status,
+        repair_provider_request_id=repair_provider_request_id,
+        repair_finish_reason=repair_finish_reason,
     )
 
 
@@ -346,6 +373,7 @@ def _validate_and_repair_sync(
         )
     if services.rag_generator is None:
         raise ModelUnavailableError("Generation provider is not configured")
+    repair_start = time.perf_counter()
     try:
         repaired = services.rag_generator.generate(
             build_citation_repair_messages(
@@ -357,7 +385,50 @@ def _validate_and_repair_sync(
         ).strip()
         if not repaired:
             raise GenerationInvalidResponseError("Citation repair returned an empty answer")
-    except RAGGenerationError:
+    except asyncio.CancelledError:
+        raise
+    except RAGGenerationError as exc:
+        repair_duration_ms = round((time.perf_counter() - repair_start) * 1000, 2)
+        repair_exc_name = type(exc).__name__
+        repair_http_status = getattr(exc, "provider_http_status", None)
+        repair_req_id = getattr(exc, "provider_request_id", None)
+        repair_retry_after = getattr(exc, "retry_after", None)
+        repair_finish_reason = getattr(exc, "finish_reason", None)
+        repair_usage = getattr(exc, "output_token_usage", None)
+        structured_usage: dict[str, int] | None = None
+        if isinstance(repair_usage, dict):
+            structured_usage = {
+                k: int(v)
+                for k, v in repair_usage.items()
+                if isinstance(v, (int, float))
+                and k
+                in {
+                    "prompt_tokens",
+                    "completion_tokens",
+                    "total_tokens",
+                    "queue_time",
+                    "prompt_time",
+                    "completion_time",
+                    "total_time",
+                }
+            }
+        logger.warning(
+            json.dumps(
+                {
+                    "event": "rag_repair_provider_failure",
+                    "exception_class": repair_exc_name,
+                    "provider_http_status": repair_http_status,
+                    "provider_request_id": repair_req_id,
+                    "retry_after": repair_retry_after,
+                    "finish_reason": repair_finish_reason,
+                    "token_usage": structured_usage,
+                    "repair_attempt_count": 1,
+                    "tokens_emitted": False,
+                    "has_partial_content": False,
+                    "repair_duration_ms": repair_duration_ms,
+                }
+            )
+        )
         return _refused_outcome(
             draft=answer,
             package=package,
@@ -366,6 +437,10 @@ def _validate_and_repair_sync(
             final_semantic=SemanticCheck(None, False),
             repair_attempted=True,
             reason="repair_provider_error",
+            repair_error_category=repair_exc_name,
+            repair_provider_http_status=repair_http_status,
+            repair_provider_request_id=repair_req_id,
+            repair_finish_reason=repair_finish_reason,
         )
     final_structural = validate_citations(repaired, len(package.papers))
     final_semantic = (
@@ -454,22 +529,70 @@ async def _validate_and_repair_async(
         )
     if services.rag_generator is None:
         raise ModelUnavailableError("Generation provider is not configured")
+    parts: list[str] = []
+    repair_start = time.perf_counter()
     try:
-        parts = [
-            token
-            async for token in services.rag_generator.generate_stream_async(
-                build_citation_repair_messages(
-                    package,
-                    answer,
-                    validation_feedback=_repair_feedback(answer, initial, initial_semantic),
-                ),
-                temperature=0.0,
-            )
-        ]
+        async for token in services.rag_generator.generate_stream_async(
+            build_citation_repair_messages(
+                package,
+                answer,
+                validation_feedback=_repair_feedback(answer, initial, initial_semantic),
+            ),
+            temperature=0.0,
+        ):
+            parts.append(token)
         repaired = "".join(parts).strip()
         if not repaired:
-            raise GenerationInvalidResponseError("Citation repair returned an empty answer")
-    except RAGGenerationError:
+            raise GenerationInvalidResponseError(
+                "Citation repair returned an empty answer",
+                tokens_emitted=bool(parts),
+            )
+    except asyncio.CancelledError:
+        raise
+    except RAGGenerationError as exc:
+        repair_duration_ms = round((time.perf_counter() - repair_start) * 1000, 2)
+        has_partial_content = bool("".join(parts).strip())
+        tokens_emitted = bool(parts) or getattr(exc, "tokens_emitted", False)
+        repair_exc_name = type(exc).__name__
+        repair_http_status = getattr(exc, "provider_http_status", None)
+        repair_req_id = getattr(exc, "provider_request_id", None)
+        repair_retry_after = getattr(exc, "retry_after", None)
+        repair_finish_reason = getattr(exc, "finish_reason", None)
+        repair_usage = getattr(exc, "output_token_usage", None)
+        structured_usage: dict[str, int] | None = None
+        if isinstance(repair_usage, dict):
+            structured_usage = {
+                k: int(v)
+                for k, v in repair_usage.items()
+                if isinstance(v, (int, float))
+                and k
+                in {
+                    "prompt_tokens",
+                    "completion_tokens",
+                    "total_tokens",
+                    "queue_time",
+                    "prompt_time",
+                    "completion_time",
+                    "total_time",
+                }
+            }
+        logger.warning(
+            json.dumps(
+                {
+                    "event": "rag_repair_provider_failure",
+                    "exception_class": repair_exc_name,
+                    "provider_http_status": repair_http_status,
+                    "provider_request_id": repair_req_id,
+                    "retry_after": repair_retry_after,
+                    "finish_reason": repair_finish_reason,
+                    "token_usage": structured_usage,
+                    "repair_attempt_count": 1,
+                    "tokens_emitted": tokens_emitted,
+                    "has_partial_content": has_partial_content,
+                    "repair_duration_ms": repair_duration_ms,
+                }
+            )
+        )
         return _refused_outcome(
             draft=answer,
             package=package,
@@ -478,6 +601,10 @@ async def _validate_and_repair_async(
             final_semantic=SemanticCheck(None, False),
             repair_attempted=True,
             reason="repair_provider_error",
+            repair_error_category=repair_exc_name,
+            repair_provider_http_status=repair_http_status,
+            repair_provider_request_id=repair_req_id,
+            repair_finish_reason=repair_finish_reason,
         )
     final_structural = validate_citations(repaired, len(package.papers))
     final_semantic = (
@@ -621,6 +748,10 @@ def _metadata(
         failure_reason=outcome.failure_reason,
         verification_provider_http_status=outcome.verification_provider_http_status,
         verification_provider_request_id=outcome.verification_provider_request_id,
+        repair_error_category=outcome.repair_error_category,
+        repair_provider_http_status=outcome.repair_provider_http_status,
+        repair_provider_request_id=outcome.repair_provider_request_id,
+        repair_finish_reason=outcome.repair_finish_reason,
     )
 
 
