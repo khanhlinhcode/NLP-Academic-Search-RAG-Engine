@@ -576,6 +576,9 @@ Metric semantics cần đọc đúng:
 Reports được ghi dưới `reports/experiments/` và bị Git ignore. Mỗi kết luận benchmark phải đi kèm
 dataset/split, corpus version, model/revision, config, seed, `k`, hardware và limitations.
 
+Đánh giá RAG trên corpus Qdrant cloud dùng [quy trình và bộ smoke riêng](docs/evaluation/CLOUD_RAG_EVALUATION.md);
+không gộp với chỉ số retrieval SciFact local.
+
 > [!NOTE]
 > Bộ benchmark thực nghiệm trên BEIR/SciFact (5.183 bài báo, 100 Dev queries, 100 Holdout queries) đã được hoàn thiện và công bố đầy đủ tại [`docs/benchmarks/scifact-2026-11/`](docs/benchmarks/scifact-2026-11/). Bộ fixture nhỏ commit trong repository (`benchmarks/retrieval/in_domain_golden.json`) phục vụ kiểm tra regression nhanh khi chạy CI/CD (`make eval-retrieval`). Không sử dụng fixture nhỏ để đánh giá chất lượng thay cho benchmark chính thức.
 

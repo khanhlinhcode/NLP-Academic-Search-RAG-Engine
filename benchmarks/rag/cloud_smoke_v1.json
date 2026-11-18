@@ -1,0 +1,60 @@
+{
+  "name": "cloud-rag-smoke-v1",
+  "dataset_role": "pilot_smoke",
+  "provenance": "Agent-reviewed live UI smoke cases from 2026-11-18; not an independently labelled holdout.",
+  "corpus": {
+    "provider": "qdrant",
+    "version": "arxiv-20260903T012243083214Z",
+    "paper_count": 1000
+  },
+  "app_commit": "b42cdff3f20051419a4d1ab465b38bc56ed3d3f1",
+  "cases": [
+    {
+      "id": "cloud-smoke-supported-001",
+      "question": "According to Transformation-Based Learning in the Fast Lane, how does the method improve transformation-based learning speed?",
+      "expected_answerability": "answerable",
+      "reference_source_ids": ["arxiv:cs/0107020"],
+      "evidence_url": "https://arxiv.org/abs/cs/0107020",
+      "observed": {
+        "answer": "The paper proposes a novel, realistic method that significantly reduces the training time of a transformation-based learner [1]. It still achieves the same performance as a standard transformation-based learner [1].",
+        "refused": false,
+        "ui_verdict": "Answer ready",
+        "cited_source_ids": ["arxiv:cs/0107020"],
+        "total_latency_ms": 11730
+      },
+      "review": {
+        "reviewer_kind": "agent_pilot",
+        "answer_correct": true,
+        "factual_claims": [
+          {
+            "claim": "The method significantly reduces training time.",
+            "supported": true,
+            "citation_correct": true
+          },
+          {
+            "claim": "The method achieves the same performance as a standard transformation-based learner.",
+            "supported": true,
+            "citation_correct": true
+          }
+        ]
+      }
+    },
+    {
+      "id": "cloud-smoke-refusal-001",
+      "question": "What do the indexed papers prove about the geology of Mars in the year 1600?",
+      "expected_answerability": "unanswerable",
+      "reference_source_ids": [],
+      "observed": {
+        "answer": "Not enough evidence in the retrieved sources.",
+        "refused": true,
+        "ui_verdict": "Answer withheld",
+        "cited_source_ids": [],
+        "total_latency_ms": null
+      },
+      "review": {
+        "reviewer_kind": "agent_pilot",
+        "refusal_appropriate": true
+      }
+    }
+  ]
+}
