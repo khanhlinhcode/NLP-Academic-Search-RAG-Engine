@@ -18,8 +18,8 @@ def reviewed_cases():
                     "reviewer_kind": "human",
                     "answer_correct": True,
                     "factual_claims": [
-                        {"supported": True, "citation_correct": True},
-                        {"supported": False, "citation_correct": False},
+                        {"claim": "First claim", "supported": True, "citation_correct": True},
+                        {"claim": "Second claim", "supported": False, "citation_correct": False},
                     ],
                 },
             },
@@ -60,6 +60,11 @@ def test_score_rejects_missing_review_and_duplicate_ids(reviewed_cases):
     duplicate["cases"][1]["id"] = duplicate["cases"][0]["id"]
     with pytest.raises(ValueError, match="duplicate case id"):
         score_cloud_review(duplicate)
+
+    blank_claim = copy.deepcopy(reviewed_cases)
+    blank_claim["cases"][0]["review"]["factual_claims"][0]["claim"] = "  "
+    with pytest.raises(ValueError, match="invalid factual_claims labels"):
+        score_cloud_review(blank_claim)
 
 
 def test_provider_error_counts_as_failed_question_without_diluting_success_latency(reviewed_cases):

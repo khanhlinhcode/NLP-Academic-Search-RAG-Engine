@@ -16,7 +16,14 @@
     "local_extraction_sha256": "1ad18707f440974ef02400c5d87457e2cb4a97892162a870289014203fdcf4a9",
     "sha256_scope": "local extracted JSON file; not a canonical Qdrant collection checksum",
     "live_collection_membership_verified_for_anchored_ids": true,
-    "source_url_pattern": "https://arxiv.org/abs/<arxiv_id>"
+    "source_url_pattern": "https://arxiv.org/abs/<arxiv_id>",
+    "anchor_selection": {
+      "eligible_rule": "len(abstract) >= 350, len(title) <= 160, and title does not contain 'proceedings' case-insensitively",
+      "eligible_papers": 908,
+      "sort_rule": "ascending SHA256 digest bytes of UTF-8 string 'cloud-holdout-v2:' + paper id",
+      "selected_papers": 60,
+      "representativeness": "Deterministic convenience sample; not stratified by topic or year and not a probability sample."
+    }
   },
   "counts": {
     "answerable_proposed": 60,

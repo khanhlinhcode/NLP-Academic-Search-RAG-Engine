@@ -82,6 +82,8 @@ def score_cloud_review(payload: dict[str, Any]) -> dict[str, Any]:
                     raise ValueError(f"factual_claims must be non-empty in {case['id']}")
                 if not all(
                     isinstance(claim, dict)
+                    and isinstance(claim.get("claim"), str)
+                    and bool(claim["claim"].strip())
                     and isinstance(claim.get("supported"), bool)
                     and isinstance(claim.get("citation_correct"), bool)
                     for claim in claims
