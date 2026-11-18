@@ -33,6 +33,9 @@ citation support against the original paper. It reports exact numerators and den
 
 ## Before a CV quality claim
 
+The [100-question candidate bank and review sheet](CLOUD_HOLDOUT_REVIEW.md) are a starting
+point for human review. They are drafts, not a locked or scored holdout.
+
 1. Freeze the Qdrant corpus version and app commit. Create at least 100 **new** questions over
    this corpus, including answerable, insufficient-evidence and adversarial cases. Keep their
    labels out of prompt tuning and model selection.
