@@ -739,8 +739,16 @@ def _metadata(
         citation_repair_attempted=outcome.repair_attempted,
         citation_repair_succeeded=outcome.repair_succeeded,
         answer_status=outcome.answer_status,  # type: ignore[arg-type]
-        semantic_validation=outcome.semantic_validation,
-        initial_semantic_validation=outcome.initial_semantic_validation,
+        semantic_validation=(
+            outcome.semantic_validation.model_copy(update={"claims": []})
+            if outcome.answer_status == "refused_unverified" and outcome.semantic_validation
+            else outcome.semantic_validation
+        ),
+        initial_semantic_validation=(
+            outcome.initial_semantic_validation.model_copy(update={"claims": []})
+            if outcome.final_answer_replaced and outcome.initial_semantic_validation
+            else outcome.initial_semantic_validation
+        ),
         semantic_verification_attempted=outcome.semantic_attempted,
         semantic_verification_succeeded=outcome.semantic_succeeded,
         final_answer_replaced=outcome.final_answer_replaced,
@@ -859,7 +867,6 @@ def ask_question_stream(
                 if await http_request.is_disconnected():
                     return
                 answer_parts.append(token)
-                yield _sse_event("token", {"token": token})
             answer = "".join(answer_parts).strip()
             if not answer:
                 raise GenerationInvalidResponseError("Generation provider returned an empty answer")
@@ -936,8 +943,6 @@ def ask_question_stream(
                         "status": "complete" if outcome.repair_succeeded else "failed",
                     },
                 )
-            if outcome.answer != answer:
-                yield _sse_event("answer_replacement", {"answer": outcome.answer})
             yield _sse_event(
                 "stage",
                 {
@@ -947,6 +952,10 @@ def ask_question_stream(
                     else "failed",
                 },
             )
+            # Only validated final text may leave the server as answer content.
+            yield _sse_event("token", {"token": outcome.answer})
+            if outcome.answer != answer:
+                yield _sse_event("answer_replacement", {"answer": outcome.answer})
             pipeline_ms = (time.perf_counter() - generated_at) * 1000
             generation_ms = max(0.0, pipeline_ms - outcome.verification_latency_ms)
             metadata = _metadata(

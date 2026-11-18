@@ -63,7 +63,7 @@ token ở Secrets.
   FastAPI trong giới hạn Render Free.
 - **Semantically Verified RAG:** structural citation validation, semantic claim verification,
   exact-quote checking và fail-closed refusal.
-- **Streaming có trạng thái:** SSE phát sources, tokens, validation stages, answer replacement và
+- **Streaming có trạng thái:** SSE phát sources, validation stages, final answer và
   terminal metadata rõ ràng.
 - **Provenance có kiểm soát:** corpus/index manifest ràng buộc checksum, document order, embedding
   model, vector dimension và phiên bản dữ liệu.
@@ -256,13 +256,13 @@ context budget: title + metadata + abstract
    ↓
 grounding policy + XML-delimited untrusted evidence
    ↓
-LLM generation → SSE tokens
+LLM generation → giữ bản nháp tại server
    ↓
 structural citation validation
    ↓
 semantic claim-to-evidence verification (nếu bật)
    ↓
-one-pass repair (nếu cần) → final validation
+one-pass repair (nếu cần) → final validation → SSE final answer
    ↓
 verified answer / refusal + Evidence ledger
 ```
@@ -285,16 +285,16 @@ Các nguyên tắc grounding chính:
 | --- | --- |
 | `stage` | Trạng thái retrieval, generation, validation hoặc repair |
 | `sources` | Evidence ledger ổn định trước khi generation bắt đầu |
-| `token` | Phần nội dung draft đang streaming |
+| `token` | Nội dung final answer, chỉ phát sau final validation |
 | `citation_validation` | Kết quả kiểm tra citation theo cấu trúc |
 | `semantic_validation` | Kết quả claim-to-evidence verification |
-| `answer_replacement` | Thay toàn bộ draft bằng final answer đã sửa/refusal |
+| `answer_replacement` | Event tương thích, chỉ chứa final answer đã sửa/refusal |
 | `warning` | Trạng thái degraded hoặc verification không đầy đủ |
 | `done` | Terminal success, chứa final answer và final metadata authoritative |
 | `error` | Terminal failure có mã lỗi và khả năng retry |
 
-Client coi stream kết thúc mà không có `done` hoặc `error` là kết nối bị gián đoạn. UI không hiển
-thị “Answer ready” trước khi final validation hoàn tất.
+Client coi stream kết thúc mà không có `done` hoặc `error` là kết nối bị gián đoạn. UI chỉ hiển
+thị câu trả lời từ `done.answer`; các `token` từ backend phiên bản cũ không được hiển thị.
 
 ## Cấu trúc repository
 

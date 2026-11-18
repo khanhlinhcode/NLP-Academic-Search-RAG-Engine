@@ -263,8 +263,37 @@ def test_streamlit_treats_stream_without_done_as_interrupted(services, monkeypat
     assert not app.exception
     assert any("Connection" in item and "Interrupted" in item for item in rendered)
     assert not any("Answer ready" in item for item in rendered)
+    assert not any("Unverified draft." in item for item in rendered)
     assert not any("Running" in item for item in rendered)
     assert app.session_state["ask_history"] == []
+
+
+@pytest.mark.integration
+def test_streamlit_rejects_done_without_final_answer(services, monkeypatch):
+    monkeypatch.setattr(services, "ollama_available", lambda: True)
+
+    def missing_final_answer(self, question, *, top_k=5, use_reranker=False):
+        del self, question, top_k, use_reranker
+        yield {"event": "token", "data": {"token": "Unverified draft."}}
+        yield {"event": "done", "data": {"metadata": {"answer_status": "verified"}}}
+
+    monkeypatch.setattr(AcademicSearchClient, "stream_answer", missing_final_answer)
+    with _running_api(services) as port:
+        monkeypatch.setenv("API_BASE_URL", f"http://127.0.0.1:{port}")
+        app = AppTest.from_file(
+            Path(__file__).parents[2] / "scripts" / "streamlit_app.py", default_timeout=10
+        ).run()
+        app.radio[0].set_value("Ask").run()
+        app.text_area[0].input("What evidence supports the factual claim?")
+        app.button[0].click().run(timeout=10)
+
+    rendered = [str(item.value) for item in app.markdown]
+    assert not app.exception
+    assert not any("Unverified draft." in item for item in rendered)
+    assert app.session_state["ask_history"] == []
+    assert any(
+        "completed without returning a final answer" in str(item.value) for item in app.error
+    )
 
 
 @pytest.mark.integration

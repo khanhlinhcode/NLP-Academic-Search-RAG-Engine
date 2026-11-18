@@ -16,7 +16,7 @@ from nlp_academic_search.providers.verification.base import (
     SemanticVerificationTimeout,
 )
 from nlp_academic_search.rag.generator import ModelUnavailableError
-from nlp_academic_search.rag.verification import SemanticValidation
+from nlp_academic_search.rag.verification import ClaimAssessment, SemanticValidation
 
 
 def test_health_search_and_cors(services, monkeypatch):
@@ -67,7 +67,12 @@ def test_sse_event_order_and_metadata(services, monkeypatch):
         )
         assert response.status_code == 200
         body = response.text
-        assert body.index("event: sources") < body.index("event: token") < body.index("event: done")
+        assert (
+            body.index("event: sources")
+            < body.index('"name": "final_validation"')
+            < body.index("event: token")
+            < body.index("event: done")
+        )
         assert '"name": "citation_validation"' in body
         assert body.rindex('"status": "complete"') < body.index("event: done")
 
@@ -323,7 +328,7 @@ def test_incomplete_repair_stops_after_one_pass_and_returns_refusal(services, mo
     assert response.json()["answer"] == "Not enough verified evidence in the retrieved sources."
 
 
-def test_stream_repairs_once_and_replaces_draft_before_done(services, monkeypatch):
+def test_stream_repairs_once_and_withholds_draft_before_done(services, monkeypatch):
     generator = RepairingGenerator()
     services.rag_generator = generator  # type: ignore[assignment]
     monkeypatch.setattr(services, "ollama_available", lambda: True)
@@ -342,6 +347,8 @@ def test_stream_repairs_once_and_replaces_draft_before_done(services, monkeypatc
     assert body.count("event: answer_replacement") == 1
     assert body.count("event: done") == 1
     assert body.index("event: answer_replacement") < body.index("event: done")
+    assert "Novelty rewards retrieval systems. It adds retrieval value [1]." not in body
+    assert body.index('"name": "final_validation"') < body.index("event: token")
     assert '"citation_repair_attempted": true' in body
     assert '"claim_citation_coverage": 1.0' in body
     done_payload = json.loads(body.split("event: done\ndata: ", 1)[1].split("\n\n", 1)[0])
@@ -482,9 +489,10 @@ def test_verifier_invalid_request_streams_final_refusal_metadata_without_repair(
     assert '"failure_reason": "SemanticVerificationInvalidRequest"' in body
     assert '"citation_repair_attempted": false' in body
     assert body.index("event: answer_replacement") < body.index("event: done")
+    assert "Novelty rewards unseen results [1]." not in body
 
 
-def test_semantic_sse_order_replaces_draft_before_final_done(services, monkeypatch):
+def test_semantic_sse_order_releases_only_verified_answer(services, monkeypatch):
     enable_semantic_verification(monkeypatch)
     generator = SemanticRepairGenerator()
     verifier = SequencedVerifier([False, True])
@@ -500,17 +508,60 @@ def test_semantic_sse_order_replaces_draft_before_final_done(services, monkeypat
     body = response.text
     positions = [
         body.index("event: sources"),
-        body.index("event: token"),
         body.index('"name": "structural_validation"'),
         body.index('"name": "semantic_validation"'),
         body.index('"name": "answer_repair", "status": "running"'),
-        body.index("event: answer_replacement"),
         body.index('"name": "final_validation"'),
+        body.index("event: token"),
+        body.index("event: answer_replacement"),
         body.index('"name": "generation", "status": "complete"'),
         body.index("event: done"),
     ]
     assert positions == sorted(positions)
     assert '"answer_status": "verified"' in body
+    assert "The Transformer is always perfect [1]." not in body
+
+
+def test_repaired_stream_does_not_expose_draft_in_validation_metadata(services, monkeypatch):
+    enable_semantic_verification(monkeypatch)
+    services.rag_generator = SemanticRepairGenerator()  # type: ignore[assignment]
+    verifier = SequencedVerifier([False, True])
+    original_verify = verifier.verify
+
+    def verify_with_claims(answer, sources, question):
+        result = original_verify(answer, sources, question)
+        return result.model_copy(
+            update={
+                "claims": [
+                    ClaimAssessment(
+                        claim_text=answer,
+                        factual=True,
+                        cited_indices=[1],
+                        verdict="supported" if result.valid else "unsupported",
+                        evidence=[],
+                        explanation="",
+                    )
+                ]
+            }
+        )
+
+    monkeypatch.setattr(verifier, "verify", verify_with_claims)
+    services.semantic_verifier = verifier  # type: ignore[assignment]
+
+    with TestClient(create_app(services)) as client:
+        response = client.post(
+            "/api/v1/ask/stream",
+            json={"question": "How does the Transformer avoid recurrence?", "top_k": 1},
+        )
+
+    assert response.status_code == 200
+    assert "The Transformer is always perfect [1]." not in response.text
+    done_payload = json.loads(response.text.split("event: done\ndata: ", 1)[1].split("\n\n", 1)[0])
+    assert done_payload["metadata"]["initial_semantic_validation"]["valid"] is False
+    assert done_payload["metadata"]["initial_semantic_validation"]["claims"] == []
+    assert done_payload["metadata"]["semantic_validation"]["claims"][0]["claim_text"] == (
+        "The Transformer uses attention instead of recurrence [1]."
+    )
 
 
 def test_validation_error_is_structured(services):
@@ -892,6 +943,7 @@ def test_repair_stream_interrupted_emits_structured_log_with_tokens_emitted(
     done_payload = json.loads(body.split("event: done\ndata: ", 1)[1].split("\n\n", 1)[0])
     assert done_payload["answer"] == "Not enough verified evidence in the retrieved sources."
     assert "Partial token" not in done_payload["answer"]
+    assert "Partial token" not in body
 
 
 def test_repair_streaming_done_event_metadata(services, monkeypatch):

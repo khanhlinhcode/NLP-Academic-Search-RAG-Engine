@@ -66,8 +66,9 @@ model identifier as the generator is reported as non-independent.
 
 An invalid draft receives at most one unified repair pass. A repaired answer is checked again by
 both enabled layers. If it still fails, or a required verifier is unavailable, fail-closed mode
-replaces the draft with a standard refusal. The stream emits `answer_replacement` whenever the final
-text differs from the draft. `done` is the only successful terminal event and always carries the
+replaces the draft with a standard refusal. The server buffers draft tokens and emits answer content
+only after final validation. `answer_replacement` is retained for compatible clients when final
+text differs from the draft, and contains only final text. `done` is the only successful terminal event and always carries the
 authoritative final answer plus final validation metadata; `error` is the failure terminal event.
 Generation is not reported complete before final validation, and clients reject a stream that ends
 without either terminal event.

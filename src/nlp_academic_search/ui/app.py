@@ -665,8 +665,6 @@ def render_ask(client: AcademicSearchClient, health: dict | None) -> None:
         metadata: dict = {}
         error_message: str | None = None
         warnings: list[str] = []
-        draft_answer = ""
-        replacement_answer: str | None = None
         final_answer: str | None = None
         done_received = False
         history_committed = False
@@ -694,7 +692,7 @@ def render_ask(client: AcademicSearchClient, health: dict | None) -> None:
                 unsafe_allow_html=True,
             )
             st.markdown(
-                '<div class="answer-label">Draft answer · validation pending</div>',
+                '<div class="answer-label">Answer · validation pending</div>',
                 unsafe_allow_html=True,
             )
             answer_slot = st.empty()
@@ -714,13 +712,9 @@ def render_ask(client: AcademicSearchClient, health: dict | None) -> None:
                         evidence_content_slot.empty()
                         with evidence_content_slot.container():
                             render_sources(sources, metadata)
-                    elif event_type == "token":
-                        draft_answer += str(data.get("token", ""))
-                        answer_slot.markdown(draft_answer)
-                    elif event_type == "answer_replacement":
-                        replacement_answer = str(data.get("answer", "")).strip() or None
-                        if replacement_answer is not None:
-                            answer_slot.markdown(replacement_answer)
+                    elif event_type in {"token", "answer_replacement"}:
+                        # Older API versions may still send unverified draft content.
+                        continue
                     elif event_type == "stage":
                         raw_name = str(data.get("name", "working")).replace("_", " ")
                         raw_status = str(data.get("status", "running")).replace("_", " ")
@@ -781,13 +775,12 @@ def render_ask(client: AcademicSearchClient, health: dict | None) -> None:
                         "Retry the request."
                     )
                 else:
-                    answer = final_answer or replacement_answer or draft_answer.strip()
-                    if not answer:
+                    if not final_answer:
                         raise APIError("The API completed without returning a final answer.")
                     history.append(
                         {
                             "question": question.strip(),
-                            "answer": answer,
+                            "answer": final_answer,
                             "sources": sources,
                             "metadata": metadata,
                         }
