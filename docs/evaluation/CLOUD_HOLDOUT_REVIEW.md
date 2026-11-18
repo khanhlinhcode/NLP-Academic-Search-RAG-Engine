@@ -25,10 +25,10 @@ these papers; a reviewer should rebalance the final holdout if needed.
 The 100 drafts comprise 60 proposed answerable questions, 20 proposed
 insufficient-evidence or out-of-domain questions, and 20 adversarial user
 instructions. Ten adversarial questions have a proposed answerable core and ten
-ask for unsupported facts. Some questions use a paper title, which may make
-retrieval easier; reviewers should revise wording and add title-free variants
-before locking the holdout. Several remaining questions use templates and need
-specificity review.
+ask for unsupported facts. The answerable questions ask details from indexed
+abstracts, but some negative questions still use a paper title, which may make
+retrieval easier. Reviewers should revise ambiguous wording, add title-free
+variants and check the proposed answerability before locking the holdout.
 
 ## Human review and execution
 
@@ -41,6 +41,13 @@ mkdir -p reports/experiments/cloud_holdout_v1
 cp benchmarks/rag/cloud_review_sheet_v1.csv \
   reports/experiments/cloud_holdout_v1/review_sheet.csv
 ```
+
+The local `reports/experiments/cloud_holdout_v1/source_packet.md` prepared on
+2026-11-18 contains the exact indexed abstracts for the 60 anchor papers and
+their candidate questions. The Git-ignored `qdrant_papers_export.json` beside
+it contains all 1,000 indexed paper payloads for checking corpus absence; its
+SHA256 is recorded in the candidate JSON. Both local files may be absent after
+a machine reset. Compare hashes before using a new copy.
 
 1. Open each `source_url` and inspect the source abstract or paper. Confirm the
    `anchor_paper_id` and whether the question is answerable **from the indexed
